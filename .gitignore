@@ -1,16 +1,18 @@
-# Python
+# Python / venv / logs
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .venv/
-.env
-.env.*
-.venv*/
 *.log
 
-# Streamlit
+# Variáveis/segredos locais
+.env
+.env.*
 .streamlit/secrets.toml
+
+# Arquivos locais de testes
+database/*.db
 
 # SO e IDE
 .DS_Store
