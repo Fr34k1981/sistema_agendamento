@@ -1,6 +1,7 @@
 # ============================================
-# Sistema de Agendamento • Streamlit + Supabase (REST + Auth)
-# Abas: 👤 Meu Perfil | ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir | 👥 Professores | 📈 Relatórios | 🧹 Manutenção
+# Sistema de Agendamento • Streamlit + Supabase (REST + Auth + RLS)
+# Abas: 👤 Meu Perfil | ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão |
+#       🖨️ Imprimir | 👥 Professores | 📈 Relatórios | 🧹 Manutenção
 # ============================================
 
 import os
@@ -12,16 +13,18 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-# =============== PDF ===============
+# -------- PDF (reportlab) --------
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-# ===================================
 
-# =============== Supabase Auth ===============
-from supabase import create_client, Client
-# ============================================
+# -------- Supabase Client (com fallback amigável) --------
+try:
+    from supabase import create_client, Client  # pacote: 'supabase' em requirements.txt
+except ModuleNotFoundError:
+    create_client = None
+    Client = None
 
 # -----------------------------
 # 0) Config da Página
@@ -46,12 +49,20 @@ SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error(
         "⚠️ Credenciais Supabase ausentes.\n\n"
-        "Crie `.streamlit/secrets.toml` ou configure **Settings → Secrets** no Streamlit Cloud com:\n"
-        "SUPABASE_URL / SUPABASE_KEY (anon JWT iniciando com `eyJ...`)."
+        "Defina SUPABASE_URL e SUPABASE_KEY (anon JWT iniciando com `eyJ...`) "
+        "em `.streamlit/secrets.toml` (local) ou em **Settings → Secrets** (Streamlit Cloud)."
     )
     st.stop()
 
-# Client para Auth
+# Evita crash enquanto o Cloud instala dependências
+if create_client is None:
+    st.error(
+        "🚧 O ambiente ainda está instalando dependências (pacote `supabase`). "
+        "Garanta que **requirements.txt** contém `supabase`. Aguarde 1–2 minutos e clique em **Rerun**."
+    )
+    st.stop()
+
+# Cliente Auth
 SB_CLIENT: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Cabeçalhos ANON (fallback); por padrão usaremos auth_headers() com token
@@ -180,9 +191,7 @@ if 'auth_telefone' not in st.session_state:
     st.session_state.auth_telefone = None
 
 def auth_headers() -> dict:
-    """
-    Usa token do usuário logado; se não houver, usa anon.
-    """
+    """Usa token do usuário logado; se não houver, usa anon."""
     if st.session_state.sb_session and st.session_state.sb_session.get("access_token"):
         tok = st.session_state.sb_session["access_token"]
         return {
@@ -202,19 +211,19 @@ def _rest_get_auth(path: str, params: dict = None, timeout: int = 20):
 def _rest_post_auth(path: str, payload: dict, timeout: int = 20):
     url = f"{SUPABASE_URL}{path}"
     r = requests.post(url, json=payload, headers=auth_headers(), timeout=timeout)
-    if r.status_code not in (200, 201): return False, f"{r.status_code} - {r.text}"
+    if r.status_code not in (200, 201):
+        return False, f"{r.status_code} - {r.text}"
     return True, r.json()
 
 def _rest_patch_auth(path: str, payload: dict, timeout: int = 20):
     url = f"{SUPABASE_URL}{path}"
     r = requests.patch(url, json=payload, headers=auth_headers(), timeout=timeout)
-    if r.status_code not in (200, 204): return False, f"{r.status_code} - {r.text}"
+    if r.status_code not in (200, 204):
+        return False, f"{r.status_code} - {r.text}"
     return True, None
 
 def resolver_profile_do_usuario():
-    """
-    Lê o próprio perfil do usuário logado (RLS libera o próprio profile).
-    """
+    """Lê o próprio perfil do usuário logado (RLS libera o próprio profile)."""
     try:
         data = _rest_get_auth("/rest/v1/profiles?select=id,email,nome,telefone,role&limit=1")
         if data:
@@ -303,7 +312,7 @@ def verificar_conflito_api(data_yyyy_mm_dd: str, horario: str, espaco: str):
         return None
 
 # -----------------------------
-# 6) Normalização CSV/XLSX (mesmo pipeline anterior)
+# 6) Normalização CSV/XLSX
 # -----------------------------
 def _strip(x): return x.strip() if isinstance(x, str) else x
 
@@ -392,16 +401,17 @@ def _adapt_from_planilha_if_needed(df: pd.DataFrame, force_email: str = None, fo
     df = _normalize_columns(df)
     needed = ["data_agendamento","horario","espaco","turma","disciplina","prioridade","professor_nome","professor_email"]
     for n in needed:
-        if n not in df.columns: df[n] = None
+        if n not in df.columns:
+            df[n] = None
 
-    if "status" not in df.columns: df["status"] = None
+    if "status" not in df.columns:
+        df["status"] = None
     df["status"] = [
         _guess_status_from_row(row._asdict() if hasattr(row, "_asdict") else row.to_dict())
         for _, row in df.iterrows()
     ]
     df["status"] = df["status"].apply(lambda x: _normalize_status(x, default="ATIVO"))
 
-    # Normalizações
     df["data_agendamento"] = df["data_agendamento"].apply(_parse_dt_mixed)
     df["horario"] = df["horario"].apply(lambda x: _strip(x) if isinstance(x, str) else x)
     df["espaco"] = df["espaco"].apply(_normalize_espaco)
@@ -411,7 +421,6 @@ def _adapt_from_planilha_if_needed(df: pd.DataFrame, force_email: str = None, fo
     df["professor_nome"] = df["professor_nome"].apply(lambda x: _strip(x) if isinstance(x, str) else x)
     df["professor_email"] = df["professor_email"].apply(lambda x: _strip(x) if isinstance(x, str) else x)
 
-    # Força o email/nome do professor se perfil for Professor (RLS exige)
     if force_email:
         df["professor_email"] = force_email
     if force_professor_nome:
@@ -549,7 +558,6 @@ if not st.session_state.sb_user:
         if st.button("🔓 Entrar", use_container_width=True):
             try:
                 res = SB_CLIENT.auth.sign_in_with_password({"email": login_email, "password": login_pass})
-                # guarda sessão
                 st.session_state.sb_user = res.user.model_dump() if hasattr(res.user, "model_dump") else dict(res.user)
                 st.session_state.sb_session = {
                     "access_token": res.session.access_token,
@@ -561,7 +569,7 @@ if not st.session_state.sb_user:
             except Exception as e:
                 notify('error', f"Falha no login: {e}", toast=True, persist=False)
     with col_auth3:
-        st.caption("A gestão cria usuários no Auth. Você completa o perfil aqui.")
+        st.caption("A gestão cria o usuário no Auth; aqui você completa o perfil.")
 else:
     with col_auth1:
         st.success(f"Conectado: {st.session_state.auth_nome or st.session_state.auth_email}")
@@ -576,7 +584,6 @@ else:
                 SB_CLIENT.auth.sign_out()
             except Exception:
                 pass
-            # limpa sessão
             st.session_state.sb_user = None
             st.session_state.sb_session = None
             st.session_state.auth_email = None
@@ -588,7 +595,7 @@ else:
 
 st.markdown("---")
 
-# Se não logado, mostra apenas “Meu Perfil” com login em cima
+# Controle de login para liberar funcionalidades
 logado = st.session_state.sb_user is not None
 
 # Navbar (8 abas)
@@ -611,7 +618,6 @@ if st.session_state.aba_selecionada == "👤 Meu Perfil":
     if not logado:
         st.info("Faça login acima para editar seu perfil.")
     else:
-        # Mostra/edita dados do profile (nome/telefone)
         nome = st.text_input("Nome", value=st.session_state.auth_nome or "")
         telefone = st.text_input("Telefone", value=st.session_state.auth_telefone or "")
         email_ro = st.session_state.auth_email or "(sem email)"
@@ -641,7 +647,6 @@ elif st.session_state.aba_selecionada == "✨ Agendar":
     if not logado:
         st.warning("🔒 Efetue login para agendar.")
     else:
-        # Professores ATIVOS (RLS: professor verá só o seu; gestão vê todos)
         df_prof = prof_list(only_active=True)
         lista_nomes = df_prof["nome"].dropna().tolist() if not df_prof.empty else []
 
@@ -650,7 +655,6 @@ elif st.session_state.aba_selecionada == "✨ Agendar":
 
             with col1:
                 if papel_atual() == "professor":
-                    # Professor: força nome/email do perfil
                     professor = st.session_state.auth_nome or st.session_state.auth_email or ""
                     email = st.session_state.auth_email or ""
                     st.info(f"👨‍🏫 Professor: **{professor}** (fixo)")
@@ -658,8 +662,6 @@ elif st.session_state.aba_selecionada == "✨ Agendar":
                     if not lista_nomes:
                         st.warning("⚠️ Nenhum professor ATIVO encontrado. Use a aba '👥 Professores' para cadastrar/importar.")
                     professor = st.selectbox("👨‍🏫 Professor:", [""] + lista_nomes, index=0)
-
-                    # auto preencher e-mail
                     email_default = ""
                     if professor and not df_prof.empty:
                         linha = df_prof[df_prof["nome"] == professor]
@@ -695,7 +697,6 @@ elif st.session_state.aba_selecionada == "✨ Agendar":
                 if (papel_atual() == "professor") and (not st.session_state.auth_email):
                     notify('error', "Seu perfil não possui email. Complete seu perfil na aba 'Meu Perfil'.", toast=True, persist=False)
                     st.stop()
-
                 if (papel_atual() == "gestao") and ((not professor) or (not email)):
                     notify('warning', "⚠️ Selecione o professor e email (gestão).", toast=True, persist=False)
                     st.stop()
@@ -782,7 +783,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
     if not logado:
         st.warning("🔒 Efetue login para visualizar/editar seus agendamentos.")
     else:
-        # --- Buscar do professor ---
         df_prof = prof_list(only_active=True)
         lista_nomes = df_prof["nome"].dropna().tolist() if not df_prof.empty else []
         if gestao_ativa():
@@ -930,7 +930,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
             force_email = None
             force_nome = None
             if not gestao_ativa():
-                # Professor só pode importar para si
                 force_email = st.session_state.auth_email
                 force_nome = st.session_state.auth_nome or st.session_state.auth_email
 
@@ -1079,51 +1078,49 @@ elif st.session_state.aba_selecionada == "🖨️ Imprimir":
                         components.html("<script>window.print()</script>", height=0, width=0)
 
                 # Exportar PDF
-                c3, _ = st.columns([1,1])
-                with c3:
-                    def gerar_pdf_agendamentos(df: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
-                        if df is None or df.empty: return b""
-                        from io import BytesIO
-                        buffer = BytesIO()
-                        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
-                        styles = getSampleStyleSheet()
-                        story = []
-                        story.append(Paragraph(titulo, styles["Title"]))
-                        story.append(Spacer(1, 8))
-                        cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
-                        for c in cols:
-                            if c not in df.columns: df[c] = ""
-                        data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
-                        for _, r in df[cols].iterrows():
-                            data_tab.append([
-                                r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
-                                r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
-                            ])
-                        table = Table(data_tab, repeatRows=1)
-                        table.setStyle(TableStyle([
-                            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
-                            ('TEXTCOLOR',(0,0),(-1,0), colors.black),
-                            ('ALIGN',(0,0),(-1,-1),'LEFT'),
-                            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0,0), (-1,-1), 9),
-                            ('BOTTOMPADDING', (0,0), (-1,0), 6),
-                            ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
-                        ]))
-                        story.append(table)
-                        doc.build(story)
-                        pdf = buffer.getvalue()
-                        buffer.close()
-                        return pdf
+                def gerar_pdf_agendamentos(df_pdf: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
+                    if df_pdf is None or df_pdf.empty: return b""
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
+                    styles = getSampleStyleSheet()
+                    story = []
+                    story.append(Paragraph(titulo, styles["Title"]))
+                    story.append(Spacer(1, 8))
+                    cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
+                    for c in cols:
+                        if c not in df_pdf.columns: df_pdf[c] = ""
+                    data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
+                    for _, r in df_pdf[cols].iterrows():
+                        data_tab.append([
+                            r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
+                            r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
+                        ])
+                    table = Table(data_tab, repeatRows=1)
+                    table.setStyle(TableStyle([
+                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
+                        ('TEXTCOLOR',(0,0),(-1,0), colors.black),
+                        ('ALIGN',(0,0),(-1,-1),'LEFT'),
+                        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0,0), (-1,-1), 9),
+                        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                        ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+                    ]))
+                    story.append(table)
+                    doc.build(story)
+                    pdf = buffer.getvalue()
+                    buffer.close()
+                    return pdf
 
-                    pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
-                    st.download_button(
-                        "📄 Exportar PDF",
-                        data=pdf_bytes,
-                        file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                        disabled=(not pdf_bytes)
-                    )
+                pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+                st.download_button(
+                    "📄 Exportar PDF",
+                    data=pdf_bytes,
+                    file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    disabled=(not pdf_bytes)
+                )
 
 # -----------------------------
 # 14) ABA 👥 Professores (CRUD + Import CSV)
