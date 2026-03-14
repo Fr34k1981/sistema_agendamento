@@ -1319,4 +1319,3 @@ st.markdown(
     "<div style='text-align:center;color:#666;font-size:0.9rem'>Sistema de Agendamento • Streamlit + Supabase (Auth + RLS)</div>",
     unsafe_allow_html=True,
 )
-``
