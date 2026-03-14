@@ -1,6 +1,6 @@
 # ============================================
 # Sistema de Agendamento • Streamlit + Supabase (REST)
-# Abas: ✨ Agendar | 📋 Meus Agendamentos (c/ Importar) | ⚙️ Gestão | 🖨️ Imprimir | 👥 Professores
+# Abas: ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir | 👥 Professores | 📈 Relatórios | 🧹 Manutenção
 # ============================================
 
 import os
@@ -11,6 +11,14 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+
+# =============== PDF ===============
+# Exportar PDF com reportlab (A4 paisagem)
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+# ===================================
 
 # -----------------------------
 # 0) Config da Página
@@ -37,7 +45,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error(
         "⚠️ Credenciais Supabase ausentes.\n\n"
         "Crie `.streamlit/secrets.toml` com SUPABASE_URL/SUPABASE_KEY (anon JWT iniciando com `eyJ...`) "
-        "ou exporte as variáveis no terminal."
+        "ou exporte as variáveis no terminal/Secrets do Cloud."
     )
     st.stop()
 
@@ -458,8 +466,10 @@ def importar_agendamentos_df(
     return sucessos, falhas, invalid_rows, df
 
 # -----------------------------
-# 6) Estados de Sessão + Navegação
+# 6) Estados de Sessão + Perfis + Navegação
 # -----------------------------
+if 'perfil' not in st.session_state:
+    st.session_state.perfil = "Professor"  # "Professor" | "Gestão"
 if 'gestao_logado' not in st.session_state:
     st.session_state.gestao_logado = False
 if 'aba_selecionada' not in st.session_state:
@@ -471,23 +481,45 @@ if 'pending_delete_id' not in st.session_state:
 if 'pending_delete_prof' not in st.session_state:
     st.session_state.pending_delete_prof = None
 
-# Navbar
-cols = st.columns(5)
-with cols[0]:
-    if st.button("✨ Agendar", use_container_width=True, type="primary" if st.session_state.aba_selecionada == "✨ Agendar" else "secondary"):
-        st.session_state.aba_selecionada = "✨ Agendar"
-with cols[1]:
-    if st.button("📋 Meus Agendamentos", use_container_width=True, type="primary" if st.session_state.aba_selecionada == "📋 Meus Agendamentos" else "secondary"):
-        st.session_state.aba_selecionada = "📋 Meus Agendamentos"
-with cols[2]:
-    if st.button("⚙️ Gestão", use_container_width=True, type="primary" if st.session_state.aba_selecionada == "⚙️ Gestão" else "secondary"):
-        st.session_state.aba_selecionada = "⚙️ Gestão"
-with cols[3]:
-    if st.button("🖨️ Imprimir", use_container_width=True, type="primary" if st.session_state.aba_selecionada == "🖨️ Imprimir" else "secondary"):
-        st.session_state.aba_selecionada = "🖨️ Imprimir"
-with cols[4]:
-    if st.button("👥 Professores", use_container_width=True, type="primary" if st.session_state.aba_selecionada == "👥 Professores" else "secondary"):
-        st.session_state.aba_selecionada = "👥 Professores"
+# Seletor de perfil (Professor x Gestão)
+st.markdown("### 👤 Perfil de acesso")
+colp1, colp2, colp3 = st.columns([1,1,3])
+
+with colp1:
+    escolha = st.selectbox("Entrar como:", ["Professor", "Gestão"], index=(0 if st.session_state.perfil=="Professor" else 1))
+    if escolha != st.session_state.perfil:
+        st.session_state.perfil = escolha
+        if escolha == "Professor":
+            st.session_state.gestao_logado = False
+        st.rerun()
+
+with colp2:
+    if st.session_state.perfil == "Gestão":
+        if not st.session_state.gestao_logado:
+            senha_try = st.text_input("Senha da Gestão", type="password")
+            if st.button("🔓 Entrar (Gestão)"):
+                if senha_try == SENHA_GESTAO:
+                    st.session_state.gestao_logado = True
+                    notify('success', "✅ Gestão autenticada.", toast=True, persist=True)
+                    st.rerun()
+                else:
+                    notify('error', "❌ Senha inválida.", toast=True, persist=False)
+        else:
+            st.success("🔓 Gestão ativa")
+            if st.button("🚪 Sair da Gestão"):
+                st.session_state.gestao_logado = False
+                st.session_state.perfil = "Professor"
+                st.rerun()
+
+st.markdown("---")
+
+# Navbar (7 abas)
+abas = ["✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção"]
+cols = st.columns(len(abas))
+for i, nome in enumerate(abas):
+    with cols[i]:
+        if st.button(nome, use_container_width=True, type="primary" if st.session_state.aba_selecionada == nome else "secondary"):
+            st.session_state.aba_selecionada = nome
 
 st.markdown("---")
 
@@ -634,6 +666,8 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
             if df.empty:
                 st.info("📭 Nenhum agendamento encontrado")
             else:
+                perfil_atual = st.session_state.perfil
+                gestao_ativa = st.session_state.gestao_logado
                 for _, row in df.iterrows():
                     data_obj = datetime.strptime(row['data_agendamento'], '%Y-%m-%d')
                     dia_semana = data_obj.strftime('%A')
@@ -651,9 +685,17 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
 
                         a1, a2, a3 = st.columns(3)
 
+                        dono_do_registro = (row['professor_nome'] == professor_selecionado)
+                        permite_editar   = gestao_ativa or (perfil_atual == "Professor" and dono_do_registro)
+                        permite_excluir  = gestao_ativa
+                        permite_cancelar = gestao_ativa or (perfil_atual == "Professor" and dono_do_registro)
+
                         # --- Editar ---
-                        if a1.button("✏️ Editar", key=f"edit_{row['id']}"):
-                            st.session_state[f"edit_mode_{row['id']}"] = True
+                        if permite_editar:
+                            if a1.button("✏️ Editar", key=f"edit_{row['id']}"):
+                                st.session_state[f"edit_mode_{row['id']}"] = True
+                        else:
+                            a1.caption("🔒")
 
                         if st.session_state.get(f"edit_mode_{row['id']}", False):
                             with st.form(f"form_edit_{row['id']}"):
@@ -663,7 +705,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                                     nova_turma = st.text_input("🎓 Turma", value=row['turma'])
                                     nova_disc = st.text_input("📚 Disciplina", value=row['disciplina'] or "")
                                 with c2:
-                                    # índice default 0; se quiser, pode melhorar para selecionar a atual
                                     nova_prior = st.selectbox("⭐ Prioridade", PRIORIDADES_ESTENDIDAS + PRIORIDADES_OUTRAS + ["PRIORITARIO", "NORMAL"])
                                     novo_email = st.text_input("📧 Email (opcional)", value=row.get('professor_email') or "")
 
@@ -685,8 +726,11 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                                 st.session_state[f"edit_mode_{row['id']}"] = False
 
                         # --- Excluir (EXCLUIDO_GESTAO) ---
-                        if a2.button("🗑️ Excluir", key=f"del_{row['id']}"):
-                            st.session_state[f"confirm_del_{row['id']}"] = True
+                        if permite_excluir:
+                            if a2.button("🗑️ Excluir", key=f"del_{row['id']}"):
+                                st.session_state[f"confirm_del_{row['id']}"] = True
+                        else:
+                            a2.caption("🔒")
 
                         if st.session_state.get(f"confirm_del_{row['id']}", False):
                             d1, d2 = st.columns(2)
@@ -701,22 +745,25 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                             if d2.button("↩️ Voltar", key=f"undo_del_{row['id']}"):
                                 st.session_state[f"confirm_del_{row['id']}"] = False
 
-                        # --- Cancelar (já existia) ---
-                        if st.session_state.pending_cancel_id == row['id']:
-                            c1, c2 = st.columns(2)
-                            if c1.button("✅ Confirmar cancelamento", key=f"conf_cancel_{row['id']}"):
-                                ok, err = cancelar_agendamento(row['id'])
-                                if ok:
-                                    notify('success', "🗑️ Agendamento cancelado com sucesso.", toast=True, persist=True)
+                        # --- Cancelar ---
+                        if permite_cancelar:
+                            if st.session_state.pending_cancel_id == row['id']:
+                                c1, c2 = st.columns(2)
+                                if c1.button("✅ Confirmar cancelamento", key=f"conf_cancel_{row['id']}"):
+                                    ok, err = cancelar_agendamento(row['id'])
+                                    if ok:
+                                        notify('success', "🗑️ Agendamento cancelado com sucesso.", toast=True, persist=True)
+                                        st.session_state.pending_cancel_id = None
+                                        st.rerun()
+                                    else:
+                                        notify('error', f"Erro ao cancelar: {err}", toast=True, persist=False)
+                                if c2.button("↩️ Voltar", key=f"undo_cancel_{row['id']}"):
                                     st.session_state.pending_cancel_id = None
-                                    st.rerun()
-                                else:
-                                    notify('error', f"Erro ao cancelar: {err}", toast=True, persist=False)
-                            if c2.button("↩️ Voltar", key=f"undo_cancel_{row['id']}"):
-                                st.session_state.pending_cancel_id = None
+                            else:
+                                if a3.button("🛑 Cancelar", key=f"cancel_{row['id']}", type="secondary"):
+                                    st.session_state.pending_cancel_id = row['id']
                         else:
-                            if a3.button("🛑 Cancelar", key=f"cancel_{row['id']}", type="secondary"):
-                                st.session_state.pending_cancel_id = row['id']
+                            a3.caption("🔒")
 
     st.markdown("---")
 
@@ -797,20 +844,8 @@ elif st.session_state.aba_selecionada == "⚙️ Gestão":
     render_persisted_message()
 
     if not st.session_state.gestao_logado:
-        st.info("🔐 Acesso restrito")
-        senha = st.text_input("Senha:", type="password")
-        if st.button("🔓 Acessar", type="primary", use_container_width=True):
-            if senha == SENHA_GESTAO:
-                st.session_state.gestao_logado = True
-                notify('success', "✅ Acesso autorizado!", toast=True, persist=True)
-                st.rerun()
-            else:
-                notify('error', "❌ Senha inválida", toast=True, persist=False)
+        st.warning("🔒 Acesso restrito à Gestão (mude o perfil acima e informe a senha).")
     else:
-        if st.button("🚪 Sair"):
-            st.session_state.gestao_logado = False
-            st.rerun()
-
         col1, col2, col3 = st.columns(3)
         with col1:
             data_inicio = st.date_input("Início:", datetime.now().date())
@@ -896,6 +931,56 @@ elif st.session_state.aba_selecionada == "🖨️ Imprimir":
             with c2:
                 if st.button("🖨️ Imprimir", use_container_width=True):
                     components.html("<script>window.print()</script>", height=0, width=0)
+
+            # Exportar PDF
+            c3, _ = st.columns([1,1])
+            with c3:
+                # Gera PDF na hora
+                def gerar_pdf_agendamentos(df: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
+                    if df is None or df.empty:
+                        return b""
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
+                    styles = getSampleStyleSheet()
+                    story = []
+                    story.append(Paragraph(titulo, styles["Title"]))
+                    story.append(Spacer(1, 8))
+                    cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
+                    for c in cols:
+                        if c not in df.columns:
+                            df[c] = ""
+                    data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
+                    for _, r in df[cols].iterrows():
+                        data_tab.append([
+                            r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
+                            r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
+                        ])
+                    table = Table(data_tab, repeatRows=1)
+                    table.setStyle(TableStyle([
+                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
+                        ('TEXTCOLOR',(0,0),(-1,0), colors.black),
+                        ('ALIGN',(0,0),(-1,-1),'LEFT'),
+                        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0,0), (-1,-1), 9),
+                        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                        ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+                    ]))
+                    story.append(table)
+                    doc.build(story)
+                    pdf = buffer.getvalue()
+                    buffer.close()
+                    return pdf
+
+                pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+                st.download_button(
+                    "📄 Exportar PDF",
+                    data=pdf_bytes,
+                    file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    disabled=(not pdf_bytes)
+                )
 
 # -----------------------------
 # 11) ABA 👥 Professores (CRUD + Import CSV)
@@ -1007,7 +1092,78 @@ elif st.session_state.aba_selecionada == "👥 Professores":
                         st.session_state.pending_delete_prof = row["id"]
 
 # -----------------------------
-# 12) Rodapé
+# 12) ABA 📈 Relatórios
+# -----------------------------
+elif st.session_state.aba_selecionada == "📈 Relatórios":
+    st.header("📈 Relatórios por Espaço / Turma / Período")
+    render_persisted_message()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        data_inicio = st.date_input("Início:", datetime.now().date() - timedelta(days=7))
+    with c2:
+        data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=7))
+    with c3:
+        status_filtro = st.selectbox("Status:", ["Todos", "ATIVO", "CANCELADO", "EXCLUIDO_GESTAO"], index=0)
+
+    if st.button("📊 Gerar", type="primary", use_container_width=True):
+        df = carregar_agendamentos_filtrado(
+            data_inicio.strftime("%Y-%m-%d"),
+            data_fim.strftime("%Y-%m-%d")
+        )
+        if status_filtro != "Todos":
+            df = df[df["status"] == status_filtro]
+        if df.empty:
+            st.info("📭 Sem dados no período.")
+        else:
+            df["dia_semana"] = pd.to_datetime(df["data_agendamento"]).dt.day_name()
+
+            st.subheader("Por Espaço")
+            por_espaco = df.groupby("espaco")["id"].count().sort_values(ascending=False)
+            st.bar_chart(por_espaco)
+
+            st.subheader("Por Turma (Top 30)")
+            por_turma = df.groupby("turma")["id"].count().sort_values(ascending=False).head(30)
+            st.bar_chart(por_turma)
+
+            st.subheader("Por Dia da Semana")
+            por_dia = df.groupby("dia_semana")["id"].count().sort_values(ascending=False)
+            st.bar_chart(por_dia)
+
+            st.subheader("Tabela detalhada")
+            st.dataframe(df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']], use_container_width=True, hide_index=True)
+
+# -----------------------------
+# 13) ABA 🧹 Manutenção
+# -----------------------------
+elif st.session_state.aba_selecionada == "🧹 Manutenção":
+    st.header("🧹 Manutenção / Limpeza de Agendamentos")
+    render_persisted_message()
+
+    if not st.session_state.gestao_logado:
+        st.warning("🔒 Acesso restrito à Gestão (mude o perfil acima e informe a senha).")
+    else:
+        st.info("Esta rotina remove **definitivamente** registros antigos com status CANCELADO ou EXCLUIDO_GESTAO.")
+        colx1, colx2 = st.columns(2)
+        with colx1:
+            dias = st.number_input("Remover registros anteriores a (dias):", min_value=7, max_value=3650, value=180, step=1)
+        with colx2:
+            modo = st.selectbox("Modo de limpeza", ["DELETE definitivo"], index=0)
+
+        if st.button("🧹 Executar limpeza agora", type="primary"):
+            cutoff = (datetime.now().date() - timedelta(days=int(dias))).strftime("%Y-%m-%d")
+            try:
+                base = f"{SUPABASE_URL}/rest/v1/agendamentos?status=in.(CANCELADO,EXCLUIDO_GESTAO)&data_agendamento=lt.{cutoff}"
+                r = requests.delete(base, headers=HEADERS, timeout=20)
+                if r.status_code in (200, 204):
+                    notify('success', f"✅ Limpeza concluída (corte: {cutoff}).", toast=True, persist=True)
+                else:
+                    notify('error', f"Erro na limpeza: {r.status_code} - {r.text}", toast=True, persist=False)
+            except Exception as e:
+                notify('error', f"Falha na limpeza: {e}", toast=True, persist=False)
+
+# -----------------------------
+# 14) Rodapé
 # -----------------------------
 st.markdown("---")
 st.markdown(
