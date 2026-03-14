@@ -1,6 +1,6 @@
 # ============================================
-# Sistema de Agendamento • Streamlit + Supabase (REST)
-# Abas: ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir | 👥 Professores | 📈 Relatórios | 🧹 Manutenção
+# Sistema de Agendamento • Streamlit + Supabase (REST + Auth)
+# Abas: 👤 Meu Perfil | ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir | 👥 Professores | 📈 Relatórios | 🧹 Manutenção
 # ============================================
 
 import os
@@ -13,12 +13,15 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 # =============== PDF ===============
-# Exportar PDF com reportlab (A4 paisagem)
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 # ===================================
+
+# =============== Supabase Auth ===============
+from supabase import create_client, Client
+# ============================================
 
 # -----------------------------
 # 0) Config da Página
@@ -27,7 +30,6 @@ st.set_page_config(page_title="Sistema de Agendamento", layout="wide", page_icon
 
 # -----------------------------
 # 1) Credenciais Supabase (robustas)
-#    - tenta st.secrets; se não houver, usa variáveis de ambiente
 # -----------------------------
 def _get_secret(key: str, default: str = "") -> str:
     try:
@@ -44,11 +46,15 @@ SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error(
         "⚠️ Credenciais Supabase ausentes.\n\n"
-        "Crie `.streamlit/secrets.toml` com SUPABASE_URL/SUPABASE_KEY (anon JWT iniciando com `eyJ...`) "
-        "ou exporte as variáveis no terminal/Secrets do Cloud."
+        "Crie `.streamlit/secrets.toml` ou configure **Settings → Secrets** no Streamlit Cloud com:\n"
+        "SUPABASE_URL / SUPABASE_KEY (anon JWT iniciando com `eyJ...`)."
     )
     st.stop()
 
+# Client para Auth
+SB_CLIENT: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Cabeçalhos ANON (fallback); por padrão usaremos auth_headers() com token
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -65,7 +71,6 @@ HEADERS_UPSERT = {
 # -----------------------------
 # 2) Constantes e Listas
 # -----------------------------
-SENHA_GESTAO = "040600"          # ajuste se quiser
 DIAS_PRIORITARIO = 60
 DIAS_NORMAL = 15
 
@@ -159,37 +164,83 @@ def render_persisted_message():
         st.session_state.mensagem_tipo = None
 
 # -----------------------------
-# 4) Supabase Helpers (REST)
+# 4) Sessão Auth e helpers (token nos headers)
 # -----------------------------
-def _rest_get(path: str, params: dict = None, headers: dict = None, timeout: int = 20):
+if 'sb_user' not in st.session_state:
+    st.session_state.sb_user = None          # objeto user
+if 'sb_session' not in st.session_state:
+    st.session_state.sb_session = None       # {access_token, refresh_token}
+if 'auth_email' not in st.session_state:
+    st.session_state.auth_email = None
+if 'auth_role' not in st.session_state:
+    st.session_state.auth_role = None        # 'professor' | 'gestao'
+if 'auth_nome' not in st.session_state:
+    st.session_state.auth_nome = None
+if 'auth_telefone' not in st.session_state:
+    st.session_state.auth_telefone = None
+
+def auth_headers() -> dict:
+    """
+    Usa token do usuário logado; se não houver, usa anon.
+    """
+    if st.session_state.sb_session and st.session_state.sb_session.get("access_token"):
+        tok = st.session_state.sb_session["access_token"]
+        return {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {tok}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+    return HEADERS
+
+def _rest_get_auth(path: str, params: dict = None, timeout: int = 20):
     url = f"{SUPABASE_URL}{path}"
-    h = HEADERS.copy()
-    if headers: h.update(headers)
-    r = requests.get(url, headers=h, params=params or {}, timeout=timeout)
+    r = requests.get(url, headers=auth_headers(), params=params or {}, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
-def _rest_post(path: str, payload: dict, headers: dict = None, timeout: int = 20):
+def _rest_post_auth(path: str, payload: dict, timeout: int = 20):
     url = f"{SUPABASE_URL}{path}"
-    h = HEADERS.copy()
-    if headers: h.update(headers)
-    r = requests.post(url, json=payload, headers=h, timeout=timeout)
+    r = requests.post(url, json=payload, headers=auth_headers(), timeout=timeout)
     if r.status_code not in (200, 201): return False, f"{r.status_code} - {r.text}"
     return True, r.json()
 
-def _rest_patch(path: str, payload: dict, timeout: int = 20):
+def _rest_patch_auth(path: str, payload: dict, timeout: int = 20):
     url = f"{SUPABASE_URL}{path}"
-    r = requests.patch(url, json=payload, headers=HEADERS, timeout=timeout)
+    r = requests.patch(url, json=payload, headers=auth_headers(), timeout=timeout)
     if r.status_code not in (200, 204): return False, f"{r.status_code} - {r.text}"
     return True, None
 
-# Professores
+def resolver_profile_do_usuario():
+    """
+    Lê o próprio perfil do usuário logado (RLS libera o próprio profile).
+    """
+    try:
+        data = _rest_get_auth("/rest/v1/profiles?select=id,email,nome,telefone,role&limit=1")
+        if data:
+            p = data[0]
+            st.session_state.auth_email = p.get("email")
+            st.session_state.auth_nome = p.get("nome")
+            st.session_state.auth_telefone = p.get("telefone")
+            st.session_state.auth_role = p.get("role")
+    except Exception as e:
+        st.warning(f"Não foi possível ler perfil: {e}")
+
+def papel_atual() -> str:
+    return st.session_state.auth_role or "professor"
+
+def gestao_ativa() -> bool:
+    return papel_atual() == "gestao"
+
+# -----------------------------
+# 5) REST - Professores / Agendamentos (com token)
+# -----------------------------
 def prof_list(only_active: bool = True) -> pd.DataFrame:
     try:
         path = "/rest/v1/professores"
         sel = "?select=id,nome,email,status&order=nome.asc"
         extra = "&status=eq.ATIVO" if only_active else ""
-        rows = _rest_get(path + sel + extra)
+        rows = _rest_get_auth(path + sel + extra)
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["id","nome","email","status"])
     except Exception as e:
         st.warning(f"Não foi possível carregar professores (REST): {e}")
@@ -197,26 +248,24 @@ def prof_list(only_active: bool = True) -> pd.DataFrame:
 
 def prof_insert(nome: str, email: str, status: str = "ATIVO"):
     payload = {"nome": nome.strip(), "email": email.strip(), "status": status.strip()}
-    return _rest_post("/rest/v1/professores", payload)
+    return _rest_post_auth("/rest/v1/professores", payload)
 
 def prof_upsert(nome: str, email: str, status: str = "ATIVO"):
     payload = {"nome": (nome or "").strip(), "email": (email or "").strip(), "status": status.strip()}
-    return _rest_post("/rest/v1/professores?on_conflict=email", payload, headers=HEADERS_UPSERT)
+    return _rest_post_auth("/rest/v1/professores?on_conflict=email", payload)
 
 def prof_update(id_: int, nome: str, email: str, status: str):
     payload = {"nome": nome.strip(), "email": email.strip(), "status": status.strip()}
-    return _rest_patch(f"/rest/v1/professores?id=eq.{id_}", payload)
+    return _rest_patch_auth(f"/rest/v1/professores?id=eq.{id_}", payload)
 
 def prof_delete(id_: int):
     url = f"/rest/v1/professores?id=eq.{id_}"
-    r = requests.delete(f"{SUPABASE_URL}{url}", headers=HEADERS, timeout=15)
+    r = requests.delete(f"{SUPABASE_URL}{url}", headers=auth_headers(), timeout=15)
     if r.status_code not in (200, 204): return False, f"{r.status_code} - {r.text}"
     return True, None
 
-# Agendamentos
 @st.cache_data(ttl=120)
 def carregar_agendamentos_filtrado(data_ini: str, data_fim: str, espaco: str = None, professor: str = None) -> pd.DataFrame:
-    """Consulta com filtros para reduzir EGRESS: período obrigatório; espaco e professor opcionais."""
     try:
         base = "/rest/v1/agendamentos?select=id,data_agendamento,horario,espaco,turma,disciplina,prioridade,semanas,professor_nome,professor_email,status&order=data_agendamento.asc,horario.asc"
         filtros = f"&data_agendamento=gte.{data_ini}&data_agendamento=lte.{data_fim}"
@@ -224,38 +273,37 @@ def carregar_agendamentos_filtrado(data_ini: str, data_fim: str, espaco: str = N
             filtros += f"&espaco=eq.{espaco}"
         if professor:
             filtros += f"&professor_nome=eq.{professor}"
-        rows = _rest_get(base + filtros)
+        rows = _rest_get_auth(base + filtros)
         return pd.DataFrame(rows) if rows else pd.DataFrame()
     except Exception as e:
         st.warning(f"Falha ao consultar agendamentos: {e}")
         return pd.DataFrame()
 
 def salvar_agendamento(dados: dict):
-    return _rest_post("/rest/v1/agendamentos", dados)
+    return _rest_post_auth("/rest/v1/agendamentos", dados)
 
 def cancelar_agendamento(id_agend: str):
-    return _rest_patch(f"/rest/v1/agendamentos?id=eq.{id_agend}", {"status": "CANCELADO"})
+    return _rest_patch_auth(f"/rest/v1/agendamentos?id=eq.{id_agend}", {"status": "CANCELADO"})
 
 def excluir_agendamento(id_agend: str):
-    return _rest_patch(f"/rest/v1/agendamentos?id=eq.{id_agend}", {"status": "EXCLUIDO_GESTAO"})
+    return _rest_patch_auth(f"/rest/v1/agendamentos?id=eq.{id_agend}", {"status": "EXCLUIDO_GESTAO"})
 
 def atualizar_agendamento(id_agend: str, payload: dict):
-    """Atualiza campos de um agendamento por ID (PATCH)."""
     campos = {k: v for k, v in payload.items() if v is not None}
-    return _rest_patch(f"/rest/v1/agendamentos?id=eq.{id_agend}", campos)
+    return _rest_patch_auth(f"/rest/v1/agendamentos?id=eq.{id_agend}", campos)
 
 def verificar_conflito_api(data_yyyy_mm_dd: str, horario: str, espaco: str):
     try:
         path = "/rest/v1/agendamentos"
         sel = "?select=id,professor_nome"
         filtro = f"&data_agendamento=eq.{data_yyyy_mm_dd}&horario=eq.{horario}&espaco=eq.{espaco}&status=eq.ATIVO&limit=1"
-        rows = _rest_get(path + sel + filtro)
+        rows = _rest_get_auth(path + sel + filtro)
         return rows[0] if rows else None
     except Exception:
         return None
 
 # -----------------------------
-# 5) Normalização CSV/XLSX de agendamentos
+# 6) Normalização CSV/XLSX (mesmo pipeline anterior)
 # -----------------------------
 def _strip(x): return x.strip() if isinstance(x, str) else x
 
@@ -340,7 +388,7 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         new_cols[c] = mapping.get(key, c)
     return df.rename(columns=new_cols)
 
-def _adapt_from_planilha_if_needed(df: pd.DataFrame) -> pd.DataFrame:
+def _adapt_from_planilha_if_needed(df: pd.DataFrame, force_email: str = None, force_professor_nome: str = None) -> pd.DataFrame:
     df = _normalize_columns(df)
     needed = ["data_agendamento","horario","espaco","turma","disciplina","prioridade","professor_nome","professor_email"]
     for n in needed:
@@ -353,6 +401,7 @@ def _adapt_from_planilha_if_needed(df: pd.DataFrame) -> pd.DataFrame:
     ]
     df["status"] = df["status"].apply(lambda x: _normalize_status(x, default="ATIVO"))
 
+    # Normalizações
     df["data_agendamento"] = df["data_agendamento"].apply(_parse_dt_mixed)
     df["horario"] = df["horario"].apply(lambda x: _strip(x) if isinstance(x, str) else x)
     df["espaco"] = df["espaco"].apply(_normalize_espaco)
@@ -361,6 +410,12 @@ def _adapt_from_planilha_if_needed(df: pd.DataFrame) -> pd.DataFrame:
     df["prioridade"] = df["prioridade"].apply(_normalize_prioridade)
     df["professor_nome"] = df["professor_nome"].apply(lambda x: _strip(x) if isinstance(x, str) else x)
     df["professor_email"] = df["professor_email"].apply(lambda x: _strip(x) if isinstance(x, str) else x)
+
+    # Força o email/nome do professor se perfil for Professor (RLS exige)
+    if force_email:
+        df["professor_email"] = force_email
+    if force_professor_nome:
+        df["professor_nome"] = force_professor_nome
 
     df = df[
         df["data_agendamento"].notna() &
@@ -389,7 +444,7 @@ def _ensure_professor(nome: str, email: str, create_if_missing: bool) -> bool:
     try:
         if email:
             path = f"/rest/v1/professores?select=id&email=eq.{email}"
-            r = _rest_get(path)
+            r = _rest_get_auth(path)
             if r: return True
             if create_if_missing:
                 ok, _ = prof_upsert(nome.strip() if nome else email.split("@")[0], email.strip(), "ATIVO")
@@ -397,7 +452,7 @@ def _ensure_professor(nome: str, email: str, create_if_missing: bool) -> bool:
             return False
         if nome:
             path = f"/rest/v1/professores?select=id&nome=eq.{nome}"
-            r = _rest_get(path)
+            r = _rest_get_auth(path)
             if r: return True
         return False if not create_if_missing else prof_upsert(nome or "(sem nome)", email or "", "ATIVO")[0]
     except Exception:
@@ -407,9 +462,11 @@ def importar_agendamentos_df(
     df_input: pd.DataFrame,
     ignorar_cancelados: bool = True,
     incluir_excluido_gestao: bool = True,
-    criar_prof_automatico: bool = True
+    criar_prof_automatico: bool = True,
+    force_email: str = None,
+    force_professor_nome: str = None
 ):
-    df = _adapt_from_planilha_if_needed(df_input)
+    df = _adapt_from_planilha_if_needed(df_input, force_email=force_email, force_professor_nome=force_professor_nome)
 
     if ignorar_cancelados:
         df = df[df["status"] != "CANCELADO"]
@@ -466,14 +523,10 @@ def importar_agendamentos_df(
     return sucessos, falhas, invalid_rows, df
 
 # -----------------------------
-# 6) Estados de Sessão + Perfis + Navegação
+# 7) Navbar + Estados
 # -----------------------------
-if 'perfil' not in st.session_state:
-    st.session_state.perfil = "Professor"  # "Professor" | "Gestão"
-if 'gestao_logado' not in st.session_state:
-    st.session_state.gestao_logado = False
 if 'aba_selecionada' not in st.session_state:
-    st.session_state.aba_selecionada = "✨ Agendar"
+    st.session_state.aba_selecionada = "👤 Meu Perfil"
 if 'pending_cancel_id' not in st.session_state:
     st.session_state.pending_cancel_id = None
 if 'pending_delete_id' not in st.session_state:
@@ -481,40 +534,65 @@ if 'pending_delete_id' not in st.session_state:
 if 'pending_delete_prof' not in st.session_state:
     st.session_state.pending_delete_prof = None
 
-# Seletor de perfil (Professor x Gestão)
-st.markdown("### 👤 Perfil de acesso")
-colp1, colp2, colp3 = st.columns([1,1,3])
+# -----------------------------
+# 8) Barra de Autenticação (Login/Logout)
+# -----------------------------
+st.markdown("### 🔐 Autenticação")
 
-with colp1:
-    escolha = st.selectbox("Entrar como:", ["Professor", "Gestão"], index=(0 if st.session_state.perfil=="Professor" else 1))
-    if escolha != st.session_state.perfil:
-        st.session_state.perfil = escolha
-        if escolha == "Professor":
-            st.session_state.gestao_logado = False
-        st.rerun()
+col_auth1, col_auth2, col_auth3 = st.columns([2,1,1])
 
-with colp2:
-    if st.session_state.perfil == "Gestão":
-        if not st.session_state.gestao_logado:
-            senha_try = st.text_input("Senha da Gestão", type="password")
-            if st.button("🔓 Entrar (Gestão)"):
-                if senha_try == SENHA_GESTAO:
-                    st.session_state.gestao_logado = True
-                    notify('success', "✅ Gestão autenticada.", toast=True, persist=True)
-                    st.rerun()
-                else:
-                    notify('error', "❌ Senha inválida.", toast=True, persist=False)
-        else:
-            st.success("🔓 Gestão ativa")
-            if st.button("🚪 Sair da Gestão"):
-                st.session_state.gestao_logado = False
-                st.session_state.perfil = "Professor"
+if not st.session_state.sb_user:
+    with col_auth1:
+        login_email = st.text_input("Email", key="login_email")
+        login_pass  = st.text_input("Senha", type="password", key="login_pass")
+    with col_auth2:
+        if st.button("🔓 Entrar", use_container_width=True):
+            try:
+                res = SB_CLIENT.auth.sign_in_with_password({"email": login_email, "password": login_pass})
+                # guarda sessão
+                st.session_state.sb_user = res.user.model_dump() if hasattr(res.user, "model_dump") else dict(res.user)
+                st.session_state.sb_session = {
+                    "access_token": res.session.access_token,
+                    "refresh_token": res.session.refresh_token
+                }
+                resolver_profile_do_usuario()
+                notify('success', "✅ Login realizado.", toast=True, persist=True)
                 st.rerun()
+            except Exception as e:
+                notify('error', f"Falha no login: {e}", toast=True, persist=False)
+    with col_auth3:
+        st.caption("A gestão cria usuários no Auth. Você completa o perfil aqui.")
+else:
+    with col_auth1:
+        st.success(f"Conectado: {st.session_state.auth_nome or st.session_state.auth_email}")
+        st.caption(f"Papel: **{papel_atual()}**")
+    with col_auth2:
+        if st.button("🔁 Atualizar perfil", use_container_width=True):
+            resolver_profile_do_usuario()
+            st.rerun()
+    with col_auth3:
+        if st.button("🚪 Sair", use_container_width=True):
+            try:
+                SB_CLIENT.auth.sign_out()
+            except Exception:
+                pass
+            # limpa sessão
+            st.session_state.sb_user = None
+            st.session_state.sb_session = None
+            st.session_state.auth_email = None
+            st.session_state.auth_role = None
+            st.session_state.auth_nome = None
+            st.session_state.auth_telefone = None
+            notify('success', "Sessão encerrada.", toast=True, persist=True)
+            st.rerun()
 
 st.markdown("---")
 
-# Navbar (7 abas)
-abas = ["✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção"]
+# Se não logado, mostra apenas “Meu Perfil” com login em cima
+logado = st.session_state.sb_user is not None
+
+# Navbar (8 abas)
+abas = ["👤 Meu Perfil","✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção"]
 cols = st.columns(len(abas))
 for i, nome in enumerate(abas):
     with cols[i]:
@@ -524,150 +602,204 @@ for i, nome in enumerate(abas):
 st.markdown("---")
 
 # -----------------------------
-# 7) ABA ✨ Agendar
+# 9) ABA 👤 Meu Perfil
 # -----------------------------
-if st.session_state.aba_selecionada == "✨ Agendar":
+if st.session_state.aba_selecionada == "👤 Meu Perfil":
+    st.header("👤 Meu Perfil")
+    render_persisted_message()
+
+    if not logado:
+        st.info("Faça login acima para editar seu perfil.")
+    else:
+        # Mostra/edita dados do profile (nome/telefone)
+        nome = st.text_input("Nome", value=st.session_state.auth_nome or "")
+        telefone = st.text_input("Telefone", value=st.session_state.auth_telefone or "")
+        email_ro = st.session_state.auth_email or "(sem email)"
+        st.text_input("Email (somente leitura)", value=email_ro, disabled=True)
+
+        c1, c2 = st.columns([1,1])
+        with c1:
+            if st.button("💾 Salvar perfil", type="primary", use_container_width=True):
+                uid = st.session_state.sb_user.get("id")
+                ok, err = _rest_patch_auth(f"/rest/v1/profiles?id=eq.{uid}", {"nome": nome, "telefone": telefone})
+                if ok:
+                    notify('success', "✅ Perfil atualizado.", toast=True, persist=True)
+                    resolver_profile_do_usuario()
+                    st.rerun()
+                else:
+                    notify('error', f"Erro ao atualizar perfil: {err}", toast=True, persist=False)
+        with c2:
+            st.caption("O email de login é gerenciado no painel do Supabase Auth.")
+
+# -----------------------------
+# 10) ABA ✨ Agendar
+# -----------------------------
+elif st.session_state.aba_selecionada == "✨ Agendar":
     st.subheader("📅 Novo Agendamento — Espaços de Tecnologia e Leitura")
     render_persisted_message()
 
-    # Professores ATIVOS
-    df_prof = prof_list(only_active=True)
-    lista_nomes = df_prof["nome"].dropna().tolist() if not df_prof.empty else []
+    if not logado:
+        st.warning("🔒 Efetue login para agendar.")
+    else:
+        # Professores ATIVOS (RLS: professor verá só o seu; gestão vê todos)
+        df_prof = prof_list(only_active=True)
+        lista_nomes = df_prof["nome"].dropna().tolist() if not df_prof.empty else []
 
-    with st.form("form_agendamento", clear_on_submit=False):
-        col1, col2 = st.columns(2)
+        with st.form("form_agendamento", clear_on_submit=False):
+            col1, col2 = st.columns(2)
 
-        with col1:
-            if not lista_nomes:
-                st.warning("⚠️ Nenhum professor ATIVO encontrado. Use a aba '👥 Professores' para cadastrar/importar.")
-            professor = st.selectbox("👨‍🏫 Professor:", [""] + lista_nomes, index=0)
+            with col1:
+                if papel_atual() == "professor":
+                    # Professor: força nome/email do perfil
+                    professor = st.session_state.auth_nome or st.session_state.auth_email or ""
+                    email = st.session_state.auth_email or ""
+                    st.info(f"👨‍🏫 Professor: **{professor}** (fixo)")
+                else:
+                    if not lista_nomes:
+                        st.warning("⚠️ Nenhum professor ATIVO encontrado. Use a aba '👥 Professores' para cadastrar/importar.")
+                    professor = st.selectbox("👨‍🏫 Professor:", [""] + lista_nomes, index=0)
 
-            # auto preencher e-mail
-            email_default = ""
-            if professor and not df_prof.empty:
-                linha = df_prof[df_prof["nome"] == professor]
-                if not linha.empty:
-                    v = linha.iloc[0].get("email")
-                    if isinstance(v, str):
-                        email_default = v
+                    # auto preencher e-mail
+                    email_default = ""
+                    if professor and not df_prof.empty:
+                        linha = df_prof[df_prof["nome"] == professor]
+                        if not linha.empty:
+                            v = linha.iloc[0].get("email")
+                            if isinstance(v, str):
+                                email_default = v
+                    email = st.text_input("📧 Email (opcional):", value=email_default)
 
-            email = st.text_input("📧 Email (opcional):", value=email_default)
-            turma = st.selectbox("🎓 Turma:", [""] + sorted(TURMAS_INTERVALOS.keys()))
-            disciplina = st.selectbox("📚 Disciplina:", [""] + DISCIPLINAS)
+                turma = st.selectbox("🎓 Turma:", [""] + sorted(TURMAS_INTERVALOS.keys()))
+                disciplina = st.selectbox("📚 Disciplina:", [""] + DISCIPLINAS)
 
-            if turma and turma in TURMAS_INTERVALOS:
-                intervalos = TURMAS_INTERVALOS[turma]
-                st.info(f"⏰ Intervalos dessa turma: ☕ {intervalos['cafe']} • 🍽️ {intervalos['almoco']}")
+                if turma and turma in TURMAS_INTERVALOS:
+                    intervalos = TURMAS_INTERVALOS[turma]
+                    st.info(f"⏰ Intervalos dessa turma: ☕ {intervalos['cafe']} • 🍽️ {intervalos['almoco']}")
 
-        with col2:
-            prioridade = st.selectbox("⭐ Prioridade:", [""] + PRIORIDADES_ESTENDIDAS + PRIORIDADES_OUTRAS)
-            espaco = st.selectbox("📍 Espaço:", [""] + ESPACOS)
-            data = st.date_input("📅 Data:", min_value=datetime.now().date())
+            with col2:
+                prioridade = st.selectbox("⭐ Prioridade:", [""] + PRIORIDADES_ESTENDIDAS + PRIORIDADES_OUTRAS)
+                espaco = st.selectbox("📍 Espaço:", [""] + ESPACOS)
+                data = st.date_input("📅 Data:", min_value=datetime.now().date())
 
-            st.markdown("### ⏰ Horários")
-            horario1 = st.selectbox("1ª Aula:", [""] + HORARIOS)
-            horario2 = st.selectbox("2ª Aula (opcional):", [""] + HORARIOS)
+                st.markdown("### ⏰ Horários")
+                horario1 = st.selectbox("1ª Aula:", [""] + HORARIOS)
+                horario2 = st.selectbox("2ª Aula (opcional):", [""] + HORARIOS)
 
-            semanas = st.selectbox("🔄 Repetir por:", [
-                "📅 Apenas este dia", "📆 1 semana", "📆 2 semanas", "📆 3 semanas", "📆 4 semanas"
-            ])
+                semanas = st.selectbox("🔄 Repetir por:", [
+                    "📅 Apenas este dia", "📆 1 semana", "📆 2 semanas", "📆 3 semanas", "📆 4 semanas"
+                ])
 
-        submitted = st.form_submit_button("✅ Confirmar Agendamento", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("✅ Confirmar Agendamento", type="primary", use_container_width=True)
 
-        if submitted:
-            if (not professor) or (not disciplina) or (not prioridade) or (not espaco) or (not turma):
-                notify('warning', "⚠️ Preencha todos os campos obrigatórios", toast=True, persist=True)
-                st.rerun()
+            if submitted:
+                if (papel_atual() == "professor") and (not st.session_state.auth_email):
+                    notify('error', "Seu perfil não possui email. Complete seu perfil na aba 'Meu Perfil'.", toast=True, persist=False)
+                    st.stop()
 
-            horarios = [h for h in [horario1, horario2] if h]
-            if not horarios:
-                notify('warning', "⚠️ Selecione pelo menos 1 horário", toast=True, persist=True)
-                st.rerun()
+                if (papel_atual() == "gestao") and ((not professor) or (not email)):
+                    notify('warning', "⚠️ Selecione o professor e email (gestão).", toast=True, persist=False)
+                    st.stop()
 
-            semanas_num = int(semanas.split()[1]) if semanas != "📅 Apenas este dia" else 0
-            eh_prioritario = prioridade in PRIORIDADES_ESTENDIDAS
-            limite_dias = DIAS_PRIORITARIO if eh_prioritario else DIAS_NORMAL
-            diff_dias = (data - datetime.now().date()).days
-            if diff_dias > limite_dias:
-                notify('warning', f"⚠️ Antecedência máxima: {limite_dias} dias", toast=True, persist=True)
-                st.rerun()
+                if (papel_atual() == "professor"):
+                    professor = st.session_state.auth_nome or st.session_state.auth_email
+                    email = st.session_state.auth_email
 
-            if turma in TURMAS_INTERVALOS:
-                intervalos = TURMAS_INTERVALOS[turma]
-                for h in horarios:
-                    if h in [intervalos.get('cafe'), intervalos.get('almoco')]:
-                        notify('warning', "⚠️ Horário de intervalo para esta turma", toast=True, persist=True)
-                        st.rerun()
+                if (not disciplina) or (not prioridade) or (not espaco) or (not turma):
+                    notify('warning', "⚠️ Preencha todos os campos obrigatórios", toast=True, persist=True)
+                    st.rerun()
 
-            # Conflito
-            conflito_msg = None
-            for h in horarios:
-                for i in range(semanas_num + 1):
-                    data_rep = data + timedelta(days=i * 7)
-                    conf = verificar_conflito_api(data_rep.strftime("%Y-%m-%d"), h, espaco)
-                    if conf:
-                        nome_quem = conf.get("professor_nome", "(desconhecido)")
-                        conflito_msg = f"{nome_quem} em {data_rep.strftime('%d/%m')} às {h}"
-                        break
-                if conflito_msg: break
+                horarios = [h for h in [horario1, horario2] if h]
+                if not horarios:
+                    notify('warning', "⚠️ Selecione pelo menos 1 horário", toast=True, persist=True)
+                    st.rerun()
 
-            if conflito_msg:
-                notify('error', f"❌ CONFLITO: {conflito_msg} já agendou", toast=True, persist=True)
-                st.rerun()
-            else:
-                falhas, sucessos = [], 0
-                for i in range(semanas_num + 1):
-                    data_salvar = (data + timedelta(days=i * 7)).strftime("%Y-%m-%d")
+                semanas_num = int(semanas.split()[1]) if semanas != "📅 Apenas este dia" else 0
+                eh_prioritario = prioridade in PRIORIDADES_ESTENDIDAS
+                limite_dias = DIAS_PRIORITARIO if eh_prioritario else DIAS_NORMAL
+                diff_dias = (data - datetime.now().date()).days
+                if diff_dias > limite_dias:
+                    notify('warning', f"⚠️ Antecedência máxima: {limite_dias} dias", toast=True, persist=True)
+                    st.rerun()
+
+                if turma in TURMAS_INTERVALOS:
+                    intervalos = TURMAS_INTERVALOS[turma]
                     for h in horarios:
-                        ok, resp = salvar_agendamento({
-                            "data_agendamento": data_salvar,
-                            "horario": h,
-                            "espaco": espaco,
-                            "turma": turma,
-                            "disciplina": disciplina,
-                            "prioridade": prioridade,
-                            "semanas": semanas_num,
-                            "professor_nome": professor,
-                            "professor_email": email or None,
-                            "status": "ATIVO"
-                        })
-                        if ok: sucessos += 1
-                        else:  falhas.append((f"{data_salvar} {h}", resp))
+                        if h in [intervalos.get('cafe'), intervalos.get('almoco')]:
+                            notify('warning', "⚠️ Horário de intervalo para esta turma", toast=True, persist=True)
+                            st.rerun()
 
-                if sucessos:
-                    notify('success', f"✅ Agendamento confirmado! ({sucessos} registro(s))", toast=True, persist=True)
-                if falhas:
-                    notify('warning', f"⚠️ Alguns registros falharam: {len(falhas)}", toast=True, persist=False)
-                    with st.expander("Ver falhas"):
-                        for item, err in falhas:
-                            st.caption(f"- {item}: {err}")
-                st.rerun()
+                # Conflito
+                conflito_msg = None
+                for h in horarios:
+                    for i in range(semanas_num + 1):
+                        data_rep = data + timedelta(days=i * 7)
+                        conf = verificar_conflito_api(data_rep.strftime("%Y-%m-%d"), h, espaco)
+                        if conf:
+                            nome_quem = conf.get("professor_nome", "(desconhecido)")
+                            conflito_msg = f"{nome_quem} em {data_rep.strftime('%d/%m')} às {h}"
+                            break
+                    if conflito_msg: break
+
+                if conflito_msg:
+                    notify('error', f"❌ CONFLITO: {conflito_msg} já agendou", toast=True, persist=True)
+                    st.rerun()
+                else:
+                    falhas, sucessos = [], 0
+                    for i in range(semanas_num + 1):
+                        data_salvar = (data + timedelta(days=i * 7)).strftime("%Y-%m-%d")
+                        for h in horarios:
+                            ok, resp = salvar_agendamento({
+                                "data_agendamento": data_salvar,
+                                "horario": h,
+                                "espaco": espaco,
+                                "turma": turma,
+                                "disciplina": disciplina,
+                                "prioridade": prioridade,
+                                "semanas": semanas_num,
+                                "professor_nome": professor,
+                                "professor_email": email or None,
+                                "status": "ATIVO"
+                            })
+                            if ok: sucessos += 1
+                            else:  falhas.append((f"{data_salvar} {h}", resp))
+
+                    if sucessos:
+                        notify('success', f"✅ Agendamento confirmado! ({sucessos} registro(s))", toast=True, persist=True)
+                    if falhas:
+                        notify('warning', f"⚠️ Alguns registros falharam: {len(falhas)}", toast=True, persist=False)
+                        with st.expander("Ver falhas"):
+                            for item, err in falhas:
+                                st.caption(f"- {item}: {err}")
+                    st.rerun()
 
 # -----------------------------
-# 8) ABA 📋 Meus Agendamentos (inclui Importar)
+# 11) ABA 📋 Meus Agendamentos (inclui Importar)
 # -----------------------------
 elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
     st.header("📋 Meus Agendamentos")
     render_persisted_message()
 
-    # --- Buscar do professor ---
-    df_prof = prof_list(only_active=True)
-    lista_nomes = df_prof["nome"].dropna().tolist() if not df_prof.empty else []
-    professor_selecionado = st.selectbox("👨‍🏫 Seu Nome:", [""] + lista_nomes)
-
-    if st.button("🔍 Buscar", type="primary", use_container_width=True):
-        if not professor_selecionado:
-            notify('warning', "⚠️ Selecione seu nome primeiro", toast=True, persist=False)
+    if not logado:
+        st.warning("🔒 Efetue login para visualizar/editar seus agendamentos.")
+    else:
+        # --- Buscar do professor ---
+        df_prof = prof_list(only_active=True)
+        lista_nomes = df_prof["nome"].dropna().tolist() if not df_prof.empty else []
+        if gestao_ativa():
+            professor_selecionado = st.selectbox("👨‍🏫 Professor:", [""] + lista_nomes)
         else:
+            professor_selecionado = st.session_state.auth_nome or st.session_state.auth_email
+            st.info(f"👨‍🏫 Professor: **{professor_selecionado}** (fixo)")
+
+        if st.button("🔍 Buscar", type="primary", use_container_width=True):
             hoje = datetime.now().date()
             ini = hoje - timedelta(days=7)
             fim = hoje + timedelta(days=90)
-            df = carregar_agendamentos_filtrado(ini.isoformat(), fim.isoformat(), professor=professor_selecionado)
+            filtro_prof = professor_selecionado if gestao_ativa() else (st.session_state.auth_nome or st.session_state.auth_email)
+            df = carregar_agendamentos_filtrado(ini.isoformat(), fim.isoformat(), professor=filtro_prof)
             if df.empty:
                 st.info("📭 Nenhum agendamento encontrado")
             else:
-                perfil_atual = st.session_state.perfil
-                gestao_ativa = st.session_state.gestao_logado
                 for _, row in df.iterrows():
                     data_obj = datetime.strptime(row['data_agendamento'], '%Y-%m-%d')
                     dia_semana = data_obj.strftime('%A')
@@ -685,10 +817,10 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
 
                         a1, a2, a3 = st.columns(3)
 
-                        dono_do_registro = (row['professor_nome'] == professor_selecionado)
-                        permite_editar   = gestao_ativa or (perfil_atual == "Professor" and dono_do_registro)
-                        permite_excluir  = gestao_ativa
-                        permite_cancelar = gestao_ativa or (perfil_atual == "Professor" and dono_do_registro)
+                        dono_do_registro = (row['professor_nome'] == filtro_prof)
+                        permite_editar   = gestao_ativa() or dono_do_registro
+                        permite_excluir  = gestao_ativa()
+                        permite_cancelar = gestao_ativa() or dono_do_registro
 
                         # --- Editar ---
                         if permite_editar:
@@ -790,16 +922,25 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
     with c_up:
         up = st.file_uploader("📄 Localizar arquivo (CSV ou XLSX)", type=["csv","xlsx"], accept_multiple_files=False)
 
-    if up is not None:
+    if up is not None and logado:
         try:
             df_raw = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up, engine="openpyxl")
             st.success(f"✅ Arquivo carregado: {up.name} — {len(df_raw)} linha(s).")
+
+            force_email = None
+            force_nome = None
+            if not gestao_ativa():
+                # Professor só pode importar para si
+                force_email = st.session_state.auth_email
+                force_nome = st.session_state.auth_nome or st.session_state.auth_email
 
             _, _, _, df_norm_preview = importar_agendamentos_df(
                 df_raw,
                 ignorar_cancelados=ignorar_cancelados,
                 incluir_excluido_gestao=incluir_excluido_gestao,
-                criar_prof_automatico=criar_prof_automatico
+                criar_prof_automatico=criar_prof_automatico,
+                force_email=force_email,
+                force_professor_nome=force_nome
             )
             show_cols = ["data_agendamento","horario","espaco","turma","disciplina","prioridade","professor_nome","professor_email","status"]
             for c in show_cols:
@@ -814,7 +955,9 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                         df_raw,
                         ignorar_cancelados=ignorar_cancelados,
                         incluir_excluido_gestao=incluir_excluido_gestao,
-                        criar_prof_automatico=criar_prof_automatico
+                        criar_prof_automatico=criar_prof_automatico,
+                        force_email=force_email,
+                        force_professor_nome=force_nome
                     )
                     if sucessos:
                         notify('success', f"✅ Inseridos: {len(sucessos)}", toast=True, persist=True)
@@ -837,14 +980,14 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
             notify('error', f"Erro ao processar arquivo: {e}", toast=True, persist=False)
 
 # -----------------------------
-# 9) ABA ⚙️ Gestão
+# 12) ABA ⚙️ Gestão (apenas gestão)
 # -----------------------------
 elif st.session_state.aba_selecionada == "⚙️ Gestão":
     st.header("⚙️ Gestão de Agendamentos")
     render_persisted_message()
 
-    if not st.session_state.gestao_logado:
-        st.warning("🔒 Acesso restrito à Gestão (mude o perfil acima e informe a senha).")
+    if not logado or not gestao_ativa():
+        st.warning("🔒 Acesso restrito à **Gestão**.")
     else:
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -868,7 +1011,7 @@ elif st.session_state.aba_selecionada == "⚙️ Gestão":
                     use_container_width=True, hide_index=True
                 )
 
-                st.markdown("### 🗑️ Excluir (marcar como EXCLUIDO_GESTAO)")
+                st.markdown("### 🗑️ Excluir (marca EXCLUIDO_GESTAO)")
                 id_list = df['id'].tolist()
                 id_excluir = st.selectbox("Selecione o ID:", id_list)
 
@@ -890,271 +1033,277 @@ elif st.session_state.aba_selecionada == "⚙️ Gestão":
                             st.session_state.pending_delete_id = id_excluir
 
 # -----------------------------
-# 10) ABA 🖨️ Imprimir
+# 13) ABA 🖨️ Imprimir
 # -----------------------------
 elif st.session_state.aba_selecionada == "🖨️ Imprimir":
     st.header("🖨️ Relatório para Impressão")
     render_persisted_message()
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        data_inicio = st.date_input("Data início:", datetime.now().date())
-    with col2:
-        data_fim = st.date_input("Data fim:", datetime.now().date() + timedelta(days=30))
-    with col3:
-        espaco_filtro = st.selectbox("Espaço:", ["Todos"] + ESPACOS)
+    if not logado:
+        st.warning("🔒 Efetue login.")
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            data_inicio = st.date_input("Data início:", datetime.now().date())
+        with col2:
+            data_fim = st.date_input("Data fim:", datetime.now().date() + timedelta(days=30))
+        with col3:
+            espaco_filtro = st.selectbox("Espaço:", ["Todos"] + ESPACOS)
 
-    if st.button("📊 Gerar Relatório", type="primary", use_container_width=True):
-        df = carregar_agendamentos_filtrado(
-            data_inicio.strftime("%Y-%m-%d"),
-            data_fim.strftime("%Y-%m-%d"),
-            espaco=None if espaco_filtro=="Todos" else espaco_filtro
-        )
-        if df.empty:
-            st.info("📭 Nenhum agendamento no período.")
-        else:
-            notify('info', f"📄 Relatório com {len(df)} linha(s) pronto.", toast=True, persist=False)
-            st.dataframe(
-                df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']],
-                use_container_width=True, hide_index=True
+        if st.button("📊 Gerar Relatório", type="primary", use_container_width=True):
+            df = carregar_agendamentos_filtrado(
+                data_inicio.strftime("%Y-%m-%d"),
+                data_fim.strftime("%Y-%m-%d"),
+                espaco=None if espaco_filtro=="Todos" else espaco_filtro
             )
-            csv = df.to_csv(index=False, encoding='utf-8-sig')
-            c1, c2 = st.columns([1,1])
-            with c1:
-                st.download_button(
-                    label="📥 Baixar CSV",
-                    data=csv,
-                    file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
+            if df.empty:
+                st.info("📭 Nenhum agendamento no período.")
+            else:
+                notify('info', f"📄 Relatório com {len(df)} linha(s) pronto.", toast=True, persist=False)
+                st.dataframe(
+                    df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']],
+                    use_container_width=True, hide_index=True
                 )
-            with c2:
-                if st.button("🖨️ Imprimir", use_container_width=True):
-                    components.html("<script>window.print()</script>", height=0, width=0)
+                csv = df.to_csv(index=False, encoding='utf-8-sig')
+                c1, c2 = st.columns([1,1])
+                with c1:
+                    st.download_button(
+                        label="📥 Baixar CSV",
+                        data=csv,
+                        file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                with c2:
+                    if st.button("🖨️ Imprimir", use_container_width=True):
+                        components.html("<script>window.print()</script>", height=0, width=0)
 
-            # Exportar PDF
-            c3, _ = st.columns([1,1])
-            with c3:
-                # Gera PDF na hora
-                def gerar_pdf_agendamentos(df: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
-                    if df is None or df.empty:
-                        return b""
-                    from io import BytesIO
-                    buffer = BytesIO()
-                    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
-                    styles = getSampleStyleSheet()
-                    story = []
-                    story.append(Paragraph(titulo, styles["Title"]))
-                    story.append(Spacer(1, 8))
-                    cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
-                    for c in cols:
-                        if c not in df.columns:
-                            df[c] = ""
-                    data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
-                    for _, r in df[cols].iterrows():
-                        data_tab.append([
-                            r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
-                            r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
-                        ])
-                    table = Table(data_tab, repeatRows=1)
-                    table.setStyle(TableStyle([
-                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
-                        ('TEXTCOLOR',(0,0),(-1,0), colors.black),
-                        ('ALIGN',(0,0),(-1,-1),'LEFT'),
-                        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                        ('FONTSIZE', (0,0), (-1,-1), 9),
-                        ('BOTTOMPADDING', (0,0), (-1,0), 6),
-                        ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
-                    ]))
-                    story.append(table)
-                    doc.build(story)
-                    pdf = buffer.getvalue()
-                    buffer.close()
-                    return pdf
+                # Exportar PDF
+                c3, _ = st.columns([1,1])
+                with c3:
+                    def gerar_pdf_agendamentos(df: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
+                        if df is None or df.empty: return b""
+                        from io import BytesIO
+                        buffer = BytesIO()
+                        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
+                        styles = getSampleStyleSheet()
+                        story = []
+                        story.append(Paragraph(titulo, styles["Title"]))
+                        story.append(Spacer(1, 8))
+                        cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
+                        for c in cols:
+                            if c not in df.columns: df[c] = ""
+                        data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
+                        for _, r in df[cols].iterrows():
+                            data_tab.append([
+                                r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
+                                r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
+                            ])
+                        table = Table(data_tab, repeatRows=1)
+                        table.setStyle(TableStyle([
+                            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
+                            ('TEXTCOLOR',(0,0),(-1,0), colors.black),
+                            ('ALIGN',(0,0),(-1,-1),'LEFT'),
+                            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0,0), (-1,-1), 9),
+                            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                            ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+                        ]))
+                        story.append(table)
+                        doc.build(story)
+                        pdf = buffer.getvalue()
+                        buffer.close()
+                        return pdf
 
-                pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
-                st.download_button(
-                    "📄 Exportar PDF",
-                    data=pdf_bytes,
-                    file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    disabled=(not pdf_bytes)
-                )
+                    pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+                    st.download_button(
+                        "📄 Exportar PDF",
+                        data=pdf_bytes,
+                        file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                        disabled=(not pdf_bytes)
+                    )
 
 # -----------------------------
-# 11) ABA 👥 Professores (CRUD + Import CSV)
+# 14) ABA 👥 Professores (CRUD + Import CSV)
 # -----------------------------
 elif st.session_state.aba_selecionada == "👥 Professores":
     st.header("👥 Professores — Importar, Cadastrar, Editar, Excluir")
     render_persisted_message()
 
-    colA, colB, _ = st.columns([1,1,3])
-    with colA:
-        if st.button("🔄 Atualizar lista", use_container_width=True):
-            st.rerun()
-    with colB:
-        filtro_status = st.selectbox("Filtro", ["ATIVOS", "TODOS"], index=0)
-
-    st.markdown("### 📥 Importar CSV (professores)")
-    st.caption("Cabeçalho: nome,email,status")
-    up = st.file_uploader("Selecione um CSV", type=["csv"], key="up_prof")
-    if up is not None:
-        try:
-            df_csv = pd.read_csv(up)
-            st.dataframe(df_csv.head(10), use_container_width=True, hide_index=True)
-            if st.button("⬆️ Enviar CSV (upsert por email)", type="primary"):
-                res = {"ok": 0, "fail": 0, "msgs": []}
-                df_csv = df_csv.rename(columns={c: c.lower().strip() for c in df_csv.columns})
-                if not {"nome","email","status"}.issubset(set(df_csv.columns)):
-                    notify('error', "CSV inválido. Cabeçalho precisa de nome,email,status", toast=True, persist=False)
-                else:
-                    for _, r in df_csv.iterrows():
-                        ok, resp = prof_upsert(str(r["nome"]), str(r["email"]), str(r["status"]))
-                        if ok: res["ok"] += 1
-                        else:
-                            res["fail"] += 1
-                            res["msgs"].append(f'{r.get("email")}: {resp}')
-                    if res["ok"]:
-                        notify('success', f"👥 {res['ok']} professor(es) atualizados/criados.", toast=True, persist=True)
-                    if res["fail"]:
-                        notify('warning', f"⚠️ {res['fail']} falha(s) ao importar. Veja detalhes abaixo.", toast=True, persist=False)
-                        with st.expander("Ver falhas"):
-                            for m in res["msgs"]:
-                                st.write("- ", m)
-                    st.rerun()
-        except Exception as e:
-            notify('error', f"Erro ao ler CSV: {e}", toast=True, persist=False)
-
-    st.markdown("---")
-    st.markdown("### ➕ Cadastrar professor")
-    with st.form("form_prof_novo"):
-        c1, c2, c3 = st.columns([2,2,1])
-        nome_n = c1.text_input("Nome *")
-        email_n = c2.text_input("Email *")
-        status_n = c3.selectbox("Status", ["ATIVO", "INATIVO"], index=0)
-        if st.form_submit_button("Salvar", type="primary"):
-            if not nome_n or not email_n:
-                notify('warning', "Informe nome e e‑mail.", toast=True, persist=False)
-            else:
-                ok, resp = prof_insert(nome_n, email_n, status_n)
-                if ok:
-                    notify('success', "👤 Professor cadastrado!", toast=True, persist=True)
-                    st.rerun()
-                else:
-                    notify('error', f"Erro ao salvar: {resp}", toast=True, persist=False)
-
-    st.markdown("---")
-    st.markdown("### ✏️ Editar / 🗑️ Excluir")
-    df_all = prof_list(only_active=(filtro_status == "ATIVOS"))
-    if df_all.empty:
-        st.info("Nenhum professor encontrado com o filtro atual.")
+    if not logado:
+        st.warning("🔒 Efetue login.")
     else:
-        for _, row in df_all.iterrows():
-            with st.expander(f"{row['nome']} — {row['email']} ({row['status']})", expanded=False):
-                f1, f2, f3 = st.columns([2,2,1])
-                nome_e = f1.text_input("Nome", value=row["nome"], key=f"nome_{row['id']}")
-                email_e = f2.text_input("Email", value=row["email"], key=f"email_{row['id']}")
-                status_e = f3.selectbox("Status", ["ATIVO", "INATIVO"], index=(0 if row["status"] == "ATIVO" else 1), key=f"status_{row['id']}")
+        colA, colB, _ = st.columns([1,1,3])
+        with colA:
+            if st.button("🔄 Atualizar lista", use_container_width=True):
+                st.rerun()
+        with colB:
+            filtro_status = st.selectbox("Filtro", ["ATIVOS", "TODOS"], index=0)
 
-                b1, b2, b3 = st.columns([1,1,2])
-                if b1.button("💾 Atualizar", key=f"upd_{row['id']}"):
-                    ok, err = prof_update(int(row["id"]), nome_e, email_e, status_e)
+        st.markdown("### 📥 Importar CSV (professores)")
+        st.caption("Cabeçalho: nome,email,status")
+        up = st.file_uploader("Selecione um CSV", type=["csv"], key="up_prof")
+        if up is not None:
+            try:
+                df_csv = pd.read_csv(up)
+                st.dataframe(df_csv.head(10), use_container_width=True, hide_index=True)
+                if st.button("⬆️ Enviar CSV (upsert por email)", type="primary"):
+                    res = {"ok": 0, "fail": 0, "msgs": []}
+                    df_csv = df_csv.rename(columns={c: c.lower().strip() for c in df_csv.columns})
+                    if not {"nome","email","status"}.issubset(set(df_csv.columns)):
+                        notify('error', "CSV inválido. Cabeçalho precisa de nome,email,status", toast=True, persist=False)
+                    else:
+                        for _, r in df_csv.iterrows():
+                            ok, resp = prof_upsert(str(r["nome"]), str(r["email"]), str(r["status"]))
+                            if ok: res["ok"] += 1
+                            else:
+                                res["fail"] += 1
+                                res["msgs"].append(f'{r.get("email")}: {resp}')
+                        if res["ok"]:
+                            notify('success', f"👥 {res['ok']} professor(es) atualizados/criados.", toast=True, persist=True)
+                        if res["fail"]:
+                            notify('warning', f"⚠️ {res['fail']} falha(s) ao importar. Veja detalhes abaixo.", toast=True, persist=False)
+                            with st.expander("Ver falhas"):
+                                for m in res["msgs"]:
+                                    st.write("- ", m)
+                        st.rerun()
+            except Exception as e:
+                notify('error', f"Erro ao ler CSV: {e}", toast=True, persist=False)
+
+        st.markdown("---")
+        st.markdown("### ➕ Cadastrar professor")
+        with st.form("form_prof_novo"):
+            c1, c2, c3 = st.columns([2,2,1])
+            nome_n = c1.text_input("Nome *")
+            email_n = c2.text_input("Email *")
+            status_n = c3.selectbox("Status", ["ATIVO", "INATIVO"], index=0)
+            if st.form_submit_button("Salvar", type="primary"):
+                if not nome_n or not email_n:
+                    notify('warning', "Informe nome e e‑mail.", toast=True, persist=False)
+                else:
+                    ok, resp = prof_insert(nome_n, email_n, status_n)
                     if ok:
-                        notify('success', "✅ Professor atualizado.", toast=True, persist=True)
+                        notify('success', "👤 Professor cadastrado!", toast=True, persist=True)
                         st.rerun()
                     else:
-                        notify('error', f"Erro: {err}", toast=True, persist=False)
+                        notify('error', f"Erro ao salvar: {resp}", toast=True, persist=False)
 
-                novo_status = "INATIVO" if row["status"] == "ATIVO" else "ATIVO"
-                if b2.button(("🚫 Inativar" if row["status"] == "ATIVO" else "✅ Ativar"), key=f"toggle_{row['id']}"):
-                    ok, err = prof_update(int(row["id"]), nome_e, email_e, novo_status)
-                    if ok:
-                        notify('success', f"Estado alterado para {novo_status}.", toast=True, persist=True)
-                        st.rerun()
-                    else:
-                        notify('error', f"Erro: {err}", toast=True, persist=False)
+        st.markdown("---")
+        st.markdown("### ✏️ Editar / 🗑️ Excluir")
+        df_all = prof_list(only_active=(filtro_status == "ATIVOS"))
+        if df_all.empty:
+            st.info("Nenhum professor encontrado com o filtro atual.")
+        else:
+            for _, row in df_all.iterrows():
+                with st.expander(f"{row['nome']} — {row['email']} ({row['status']})", expanded=False):
+                    f1, f2, f3 = st.columns([2,2,1])
+                    nome_e = f1.text_input("Nome", value=row["nome"], key=f"nome_{row['id']}")
+                    email_e = f2.text_input("Email", value=row["email"], key=f"email_{row['id']}")
+                    status_e = f3.selectbox("Status", ["ATIVO", "INATIVO"], index=(0 if row["status"] == "ATIVO" else 1), key=f"status_{row['id']}")
 
-                if st.session_state.pending_delete_prof == row["id"]:
-                    c1, c2 = st.columns(2)
-                    if c1.button("❗ Confirmar exclusão", key=f"conf_del_prof_{row['id']}"):
-                        ok, err = prof_delete(int(row["id"]))
+                    b1, b2, b3 = st.columns([1,1,2])
+                    if b1.button("💾 Atualizar", key=f"upd_{row['id']}"):
+                        ok, err = prof_update(int(row["id"]), nome_e, email_e, status_e)
                         if ok:
-                            notify('success', "🗑️ Professor excluído.", toast=True, persist=True)
-                            st.session_state.pending_delete_prof = None
+                            notify('success', "✅ Professor atualizado.", toast=True, persist=True)
                             st.rerun()
                         else:
                             notify('error', f"Erro: {err}", toast=True, persist=False)
-                    if c2.button("↩️ Cancelar", key=f"undo_del_prof_{row['id']}"):
-                        st.session_state.pending_delete_prof = None
-                else:
-                    if st.button("🗑️ Excluir definitivamente", key=f"del_prof_{row['id']}"):
-                        st.session_state.pending_delete_prof = row["id"]
+
+                    novo_status = "INATIVO" if row["status"] == "ATIVO" else "ATIVO"
+                    if b2.button(("🚫 Inativar" if row["status"] == "ATIVO" else "✅ Ativar"), key=f"toggle_{row['id']}"):
+                        ok, err = prof_update(int(row["id"]), nome_e, email_e, novo_status)
+                        if ok:
+                            notify('success', f"Estado alterado para {novo_status}.", toast=True, persist=True)
+                            st.rerun()
+                        else:
+                            notify('error', f"Erro: {err}", toast=True, persist=False)
+
+                    if st.session_state.pending_delete_prof == row["id"]:
+                        c1, c2 = st.columns(2)
+                        if c1.button("❗ Confirmar exclusão", key=f"conf_del_prof_{row['id']}"):
+                            ok, err = prof_delete(int(row["id"]))
+                            if ok:
+                                notify('success', "🗑️ Professor excluído.", toast=True, persist=True)
+                                st.session_state.pending_delete_prof = None
+                                st.rerun()
+                            else:
+                                notify('error', f"Erro: {err}", toast=True, persist=False)
+                        if c2.button("↩️ Cancelar", key=f"undo_del_prof_{row['id']}"):
+                            st.session_state.pending_delete_prof = None
+                    else:
+                        if st.button("🗑️ Excluir definitivamente", key=f"del_prof_{row['id']}"):
+                            st.session_state.pending_delete_prof = row["id"]
 
 # -----------------------------
-# 12) ABA 📈 Relatórios
+# 15) ABA 📈 Relatórios
 # -----------------------------
 elif st.session_state.aba_selecionada == "📈 Relatórios":
     st.header("📈 Relatórios por Espaço / Turma / Período")
     render_persisted_message()
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        data_inicio = st.date_input("Início:", datetime.now().date() - timedelta(days=7))
-    with c2:
-        data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=7))
-    with c3:
-        status_filtro = st.selectbox("Status:", ["Todos", "ATIVO", "CANCELADO", "EXCLUIDO_GESTAO"], index=0)
+    if not logado:
+        st.warning("🔒 Efetue login.")
+    else:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            data_inicio = st.date_input("Início:", datetime.now().date() - timedelta(days=7))
+        with c2:
+            data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=7))
+        with c3:
+            status_filtro = st.selectbox("Status:", ["Todos", "ATIVO", "CANCELADO", "EXCLUIDO_GESTAO"], index=0)
 
-    if st.button("📊 Gerar", type="primary", use_container_width=True):
-        df = carregar_agendamentos_filtrado(
-            data_inicio.strftime("%Y-%m-%d"),
-            data_fim.strftime("%Y-%m-%d")
-        )
-        if status_filtro != "Todos":
-            df = df[df["status"] == status_filtro]
-        if df.empty:
-            st.info("📭 Sem dados no período.")
-        else:
-            df["dia_semana"] = pd.to_datetime(df["data_agendamento"]).dt.day_name()
+        if st.button("📊 Gerar", type="primary", use_container_width=True):
+            df = carregar_agendamentos_filtrado(
+                data_inicio.strftime("%Y-%m-%d"),
+                data_fim.strftime("%Y-%m-%d")
+            )
+            if status_filtro != "Todos":
+                df = df[df["status"] == status_filtro]
+            if df.empty:
+                st.info("📭 Sem dados no período.")
+            else:
+                df["dia_semana"] = pd.to_datetime(df["data_agendamento"]).dt.day_name()
 
-            st.subheader("Por Espaço")
-            por_espaco = df.groupby("espaco")["id"].count().sort_values(ascending=False)
-            st.bar_chart(por_espaco)
+                st.subheader("Por Espaço")
+                por_espaco = df.groupby("espaco")["id"].count().sort_values(ascending=False)
+                st.bar_chart(por_espaco)
 
-            st.subheader("Por Turma (Top 30)")
-            por_turma = df.groupby("turma")["id"].count().sort_values(ascending=False).head(30)
-            st.bar_chart(por_turma)
+                st.subheader("Por Turma (Top 30)")
+                por_turma = df.groupby("turma")["id"].count().sort_values(ascending=False).head(30)
+                st.bar_chart(por_turma)
 
-            st.subheader("Por Dia da Semana")
-            por_dia = df.groupby("dia_semana")["id"].count().sort_values(ascending=False)
-            st.bar_chart(por_dia)
+                st.subheader("Por Dia da Semana")
+                por_dia = df.groupby("dia_semana")["id"].count().sort_values(ascending=False)
+                st.bar_chart(por_dia)
 
-            st.subheader("Tabela detalhada")
-            st.dataframe(df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']], use_container_width=True, hide_index=True)
+                st.subheader("Tabela detalhada")
+                st.dataframe(df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']], use_container_width=True, hide_index=True)
 
 # -----------------------------
-# 13) ABA 🧹 Manutenção
+# 16) ABA 🧹 Manutenção (apenas gestão)
 # -----------------------------
 elif st.session_state.aba_selecionada == "🧹 Manutenção":
     st.header("🧹 Manutenção / Limpeza de Agendamentos")
     render_persisted_message()
 
-    if not st.session_state.gestao_logado:
-        st.warning("🔒 Acesso restrito à Gestão (mude o perfil acima e informe a senha).")
+    if not logado or not gestao_ativa():
+        st.warning("🔒 Acesso restrito à **Gestão**.")
     else:
-        st.info("Esta rotina remove **definitivamente** registros antigos com status CANCELADO ou EXCLUIDO_GESTAO.")
+        st.info("Remove **definitivamente** CANCELADO/EXCLUIDO_GESTAO anteriores à data de corte.")
         colx1, colx2 = st.columns(2)
         with colx1:
             dias = st.number_input("Remover registros anteriores a (dias):", min_value=7, max_value=3650, value=180, step=1)
         with colx2:
-            modo = st.selectbox("Modo de limpeza", ["DELETE definitivo"], index=0)
+            st.caption("Modo: DELETE definitivo")
 
         if st.button("🧹 Executar limpeza agora", type="primary"):
             cutoff = (datetime.now().date() - timedelta(days=int(dias))).strftime("%Y-%m-%d")
             try:
                 base = f"{SUPABASE_URL}/rest/v1/agendamentos?status=in.(CANCELADO,EXCLUIDO_GESTAO)&data_agendamento=lt.{cutoff}"
-                r = requests.delete(base, headers=HEADERS, timeout=20)
+                r = requests.delete(base, headers=auth_headers(), timeout=20)
                 if r.status_code in (200, 204):
                     notify('success', f"✅ Limpeza concluída (corte: {cutoff}).", toast=True, persist=True)
                 else:
@@ -1163,10 +1312,11 @@ elif st.session_state.aba_selecionada == "🧹 Manutenção":
                 notify('error', f"Falha na limpeza: {e}", toast=True, persist=False)
 
 # -----------------------------
-# 14) Rodapé
+# 17) Rodapé
 # -----------------------------
 st.markdown("---")
 st.markdown(
-    "<div style='text-align:center;color:#666;font-size:0.9rem'>Sistema de Agendamento • Streamlit + Supabase</div>",
+    "<div style='text-align:center;color:#666;font-size:0.9rem'>Sistema de Agendamento • Streamlit + Supabase (Auth + RLS)</div>",
     unsafe_allow_html=True,
 )
+``
