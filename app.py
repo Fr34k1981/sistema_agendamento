@@ -1150,4 +1150,3 @@ if st.session_state.aba_selecionada == "🧹 Manutenção":
 # Rodapé
 st.markdown("---")
 st.caption("Sistema de Agendamento • Menu lateral (cores padrão)")
-``
