@@ -1,7 +1,9 @@
+
 # ============================================
 # Sistema de Agendamento • Streamlit + Supabase (REST, sem login p/ professor)
 # Abas: ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir |
 #       👥 Professores | 📈 Relatórios | 🧹 Manutenção
+# Navegação: MENU LATERAL (sidebar)
 # ============================================
 
 import os
@@ -27,108 +29,6 @@ from matplotlib import cm
 # 0) Config da Página
 # -----------------------------
 st.set_page_config(page_title="Sistema de Agendamento", layout="wide", page_icon="📅")
-
-# -----------------------------
-# 0.1) CSS — Tema vermelho + botões com brilho/sombra
-# -----------------------------
-def inject_css():
-    st.markdown(
-        """
-        <style>
-        :root{
-            --brand-red: #D7263D;
-            --brand-red-dark: #B31F33;
-            --brand-gray-900:#0F1116;
-            --brand-gray-700:#1C212C;
-            --brand-white:#FFFFFF;
-        }
-
-        .stApp {
-            background: linear-gradient(180deg, #0f1116 0%, #141824 100%);
-            color: var(--brand-white);
-        }
-        h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-            color: var(--brand-white);
-            text-shadow: 0 1px 0 rgba(0,0,0,.3);
-        }
-        hr, .stMarkdown hr {
-            border: none;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, var(--brand-red), transparent);
-            margin: 12px 0 18px 0;
-        }
-        [data-testid="stExpander"] {
-            border: 1px solid rgba(255,255,255,.08);
-            background: rgba(255,255,255,.04);
-            border-radius: 10px;
-        }
-        .stTextInput > div > div > input,
-        .stSelectbox > div > div > div,
-        .stDateInput > div > div > input {
-            background: rgba(255,255,255,.06) !important;
-            color: var(--brand-white) !important;
-            border: 1px solid rgba(255,255,255,.12) !important;
-            border-radius: 10px !important;
-        }
-        .stDataFrame {
-            border: 1px solid rgba(255,255,255,.08);
-            background: rgba(255,255,255,.03);
-            border-radius: 10px;
-        }
-
-        /* Botões base (largura = conteúdo) */
-        div.stButton > button, div.stDownloadButton > button {
-            display: inline-block;
-            width: auto;
-            padding: 10px 16px;
-            border-radius: 999px;
-            border: 0;
-            font-weight: 600;
-            letter-spacing: .2px;
-            background: linear-gradient(180deg, var(--brand-red) 0%, var(--brand-red-dark) 100%);
-            color: #fff;
-            box-shadow: 0 6px 14px rgba(215, 38, 61, .35);
-            transition: all .15s ease-in-out;
-        }
-        div.stButton > button:hover, div.stDownloadButton > button:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 10px 20px rgba(215, 38, 61, .55), 0 0 0 2px rgba(240, 74, 93, .25) inset;
-        }
-        div.stButton > button:active, div.stDownloadButton > button:active {
-            transform: translateY(0);
-            box-shadow: 0 6px 14px rgba(215, 38, 61, .35) inset;
-        }
-
-        /* “Secondary” para navbar quando não selecionado */
-        .btn-secondary > button{
-            background: linear-gradient(180deg, #2a2f3f 0%, #1e2433 100%) !important;
-            color: #e9ecf2 !important;
-            box-shadow: 0 4px 10px rgba(10, 12, 16, .4) !important;
-        }
-        .btn-secondary > button:hover{
-            box-shadow: 0 8px 16px rgba(10, 12, 16, .6) !important;
-        }
-
-        .navbar-row {
-            gap: 10px;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            margin-bottom: 6px;
-        }
-        .navbar-row > div { flex: 0 0 auto; }
-
-        .stAlert {
-            border-radius: 12px;
-            background: rgba(255,255,255,.03);
-            border: 1px solid rgba(215,38,61,.25);
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-inject_css()
 
 # -----------------------------
 # 1) Credenciais Supabase (robustas)
@@ -565,7 +465,7 @@ def importar_agendamentos_df(
     return sucessos, falhas, invalid_rows, df
 
 # -----------------------------
-# 6) Estados de Sessão + Navegação
+# 6) Estados + MENU LATERAL
 # -----------------------------
 if 'gestao_logado' not in st.session_state:
     st.session_state.gestao_logado = False
@@ -578,45 +478,28 @@ if 'pending_delete_id' not in st.session_state:
 if 'pending_delete_prof' not in st.session_state:
     st.session_state.pending_delete_prof = None
 
-# ===== LIMPEZA DE CACHE (TEMPORÁRIO) =====
-if st.button("🧽 Limpar cache (temporário)"):
+# Sidebar
+st.sidebar.title("📅 Sistema de Agendamento")
+st.sidebar.caption("Navegação")
+
+aba = st.sidebar.radio(
+    "Escolha uma seção:",
+    ("✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção"),
+    index=("✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção").index(st.session_state.aba_selecionada)
+)
+st.session_state.aba_selecionada = aba
+
+# Limpar cache (útil após mudanças no banco)
+if st.sidebar.button("🧽 Limpar cache"):
     st.cache_data.clear()
+    st.sidebar.success("Cache limpo.")
     st.rerun()
 
-# -----------------------------
-# 7) Navbar estilizada (botões no tamanho do texto)
-# -----------------------------
-nav_cols = st.container()
-with nav_cols:
-    st.markdown('<div class="navbar-row">', unsafe_allow_html=True)
-    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-
-    def nav_button(col, label):
-        selected = (st.session_state.aba_selecionada == label)
-        with col:
-            holder = st.container()
-            if not selected:
-                holder.markdown('<div class="btn-secondary">', unsafe_allow_html=True)
-            clicked = st.button(label, key=f"nav_{label}")
-            if not selected:
-                holder.markdown('</div>', unsafe_allow_html=True)
-            if clicked:
-                st.session_state.aba_selecionada = label
-                st.rerun()
-
-    nav_button(col1, "✨ Agendar")
-    nav_button(col2, "📋 Meus Agendamentos")
-    nav_button(col3, "⚙️ Gestão")
-    nav_button(col4, "🖨️ Imprimir")
-    nav_button(col5, "👥 Professores")
-    nav_button(col6, "📈 Relatórios")
-    nav_button(col7, "🧹 Manutenção")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown("---")
+st.sidebar.markdown("---")
+st.sidebar.caption("© Sistema de Agendamento")
 
 # -----------------------------
-# 8) Função de gráfico (cores por categoria)
+# 7) Função de gráfico (cores por categoria)
 # -----------------------------
 def plot_bar_counts(series: pd.Series, title: str, max_bars: int = 30, palette: str = "tab20"):
     """Plota barras com cores diferentes por categoria (top N)."""
@@ -631,33 +514,22 @@ def plot_bar_counts(series: pd.Series, title: str, max_bars: int = 30, palette: 
     colors_list = [cmap(i) for i in range(len(labels))]
 
     fig, ax = plt.subplots(figsize=(min(12, 1 + 0.45*len(labels)), 5), dpi=120)
-    bars = ax.bar(labels, values, color=colors_list, edgecolor="#10131a", linewidth=0.6)
-    ax.set_title(title, color="#FFFFFF", fontsize=12, pad=12)
-    ax.set_ylabel("Quantidade", color="#FFFFFF")
-    ax.set_xticklabels(labels, rotation=45, ha="right", color="#E9ECF2")
-    ax.set_yticks(ax.get_yticks())
-    ax.set_yticklabels([int(t) for t in ax.get_yticks()], color="#E9ECF2")
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#555a66")
-    ax.spines["bottom"].set_color("#555a66")
-    ax.set_facecolor("#0F1116")
-    fig.patch.set_facecolor("#0F1116")
-
+    bars = ax.bar(labels, values, color=colors_list, edgecolor="#222", linewidth=0.6)
+    ax.set_title(title)
+    ax.set_ylabel("Quantidade")
+    ax.set_xticklabels(labels, rotation=45, ha="right")
     for rect in bars:
         height = rect.get_height()
         if height > 0:
             ax.text(rect.get_x() + rect.get_width()/2., 1.02*height,
-                    f"{int(height)}", ha='center', va='bottom', color="#FFFFFF", fontsize=8)
+                    f"{int(height)}", ha='center', va='bottom', fontsize=8)
     st.pyplot(fig, clear_figure=True)
 
 # =========================================================
-#                     ABAS (BLOCOS IF)
+#                       ABAS
 # =========================================================
 
-# -----------------------------
 # ✨ Agendar
-# -----------------------------
 if st.session_state.aba_selecionada == "✨ Agendar":
     st.subheader("📅 Novo Agendamento — Espaços de Tecnologia e Leitura")
     render_persisted_message()
@@ -679,8 +551,8 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                     v = linha.iloc[0].get("email")
                     if isinstance(v, str):
                         email_default = v
-
             email = st.text_input("📧 Email (opcional):", value=email_default)
+
             turma = st.selectbox("🎓 Turma:", [""] + sorted(TURMAS_INTERVALOS.keys()))
             disciplina = st.selectbox("📚 Disciplina:", [""] + DISCIPLINAS)
 
@@ -771,9 +643,7 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                             st.caption(f"- {item}: {err}")
                 st.rerun()
 
-# -----------------------------
 # 📋 Meus Agendamentos (+ Importar)
-# -----------------------------
 if st.session_state.aba_selecionada == "📋 Meus Agendamentos":
     st.header("📋 Meus Agendamentos")
     render_persisted_message()
@@ -941,9 +811,7 @@ if st.session_state.aba_selecionada == "📋 Meus Agendamentos":
         except Exception as e:
             notify('error', f"Erro ao processar arquivo: {e}", toast=True, persist=False)
 
-# -----------------------------
 # ⚙️ Gestão (senha simples)
-# -----------------------------
 if st.session_state.aba_selecionada == "⚙️ Gestão":
     st.header("⚙️ Gestão de Agendamentos")
     render_persisted_message()
@@ -959,7 +827,7 @@ if st.session_state.aba_selecionada == "⚙️ Gestão":
             else:
                 notify('error', "❌ Senha inválida", toast=True, persist=False)
     else:
-        if st.button("🚪 Sair"):
+        if st.button("🚪 Sair da Gestão"):
             st.session_state.gestao_logado = False
             st.rerun()
 
@@ -1006,9 +874,7 @@ if st.session_state.aba_selecionada == "⚙️ Gestão":
                         if st.button("🗑️ Excluir Permanentemente"):
                             st.session_state.pending_delete_id = id_excluir
 
-# -----------------------------
 # 🖨️ Imprimir
-# -----------------------------
 if st.session_state.aba_selecionada == "🖨️ Imprimir":
     st.header("🖨️ Relatório para Impressão")
     render_persisted_message()
@@ -1030,7 +896,6 @@ if st.session_state.aba_selecionada == "🖨️ Imprimir":
         if df.empty:
             st.info("📭 Nenhum agendamento no período.")
         else:
-            notify('info', f"📄 Relatório com {len(df)} linha(s) pronto.", toast=True, persist=False)
             st.dataframe(
                 df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']],
                 use_container_width=True, hide_index=True
@@ -1049,54 +914,50 @@ if st.session_state.aba_selecionada == "🖨️ Imprimir":
                     components.html("<script>window.print()</script>", height=0, width=0)
 
             # Exportar PDF
-            c3, _ = st.columns([1,1])
-            with c3:
-                def gerar_pdf_agendamentos(df_pdf: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
-                    if df_pdf is None or df_pdf.empty: return b""
-                    from io import BytesIO
-                    buffer = BytesIO()
-                    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
-                    styles = getSampleStyleSheet()
-                    story = []
-                    story.append(Paragraph(titulo, styles["Title"]))
-                    story.append(Spacer(1, 8))
-                    cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
-                    for c in cols:
-                        if c not in df_pdf.columns: df_pdf[c] = ""
-                    data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
-                    for _, r in df_pdf[cols].iterrows():
-                        data_tab.append([
-                            r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
-                            r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
-                        ])
-                    table = Table(data_tab, repeatRows=1)
-                    table.setStyle(TableStyle([
-                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
-                        ('TEXTCOLOR',(0,0),(-1,0), colors.black),
-                        ('ALIGN',(0,0),(-1,-1),'LEFT'),
-                        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                        ('FONTSIZE', (0,0), (-1,-1), 9),
-                        ('BOTTOMPADDING', (0,0), (-1,0), 6),
-                        ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
-                    ]))
-                    story.append(table)
-                    doc.build(story)
-                    pdf = buffer.getvalue()
-                    buffer.close()
-                    return pdf
+            def gerar_pdf_agendamentos(df_pdf: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
+                if df_pdf is None or df_pdf.empty: return b""
+                from io import BytesIO
+                buffer = BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
+                styles = getSampleStyleSheet()
+                story = []
+                story.append(Paragraph(titulo, styles["Title"]))
+                story.append(Spacer(1, 8))
+                cols = ["data_agendamento","horario","espaco","turma","professor_nome","disciplina","prioridade","status"]
+                for c in cols:
+                    if c not in df_pdf.columns: df_pdf[c] = ""
+                data_tab = [ ["Data","Horário","Espaço","Turma","Professor","Disciplina","Prioridade","Status"] ]
+                for _, r in df_pdf[cols].iterrows():
+                    data_tab.append([
+                        r["data_agendamento"], r["horario"], r["espaco"], r["turma"],
+                        r["professor_nome"], r["disciplina"], r.get("prioridade",""), r["status"]
+                    ])
+                table = Table(data_tab, repeatRows=1)
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#eeeeee")),
+                    ('TEXTCOLOR',(0,0),(-1,0), colors.black),
+                    ('ALIGN',(0,0),(-1,-1),'LEFT'),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0,0), (-1,-1), 9),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                    ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+                ]))
+                story.append(table)
+                doc.build(story)
+                pdf = buffer.getvalue()
+                buffer.close()
+                return pdf
 
-                pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
-                st.download_button(
-                    "📄 Exportar PDF",
-                    data=pdf_bytes,
-                    file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf",
-                    disabled=(not pdf_bytes)
-                )
+            pdf_bytes = gerar_pdf_agendamentos(df, titulo=f"Agendamentos {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+            st.download_button(
+                "📄 Exportar PDF",
+                data=pdf_bytes,
+                file_name=f"agendamentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                disabled=(not pdf_bytes)
+            )
 
-# -----------------------------
 # 👥 Professores (CRUD + CSV)
-# -----------------------------
 if st.session_state.aba_selecionada == "👥 Professores":
     st.header("👥 Professores — Importar, Cadastrar, Editar, Excluir")
     render_persisted_message()
@@ -1203,9 +1064,7 @@ if st.session_state.aba_selecionada == "👥 Professores":
                     if st.button("🗑️ Excluir definitivamente", key=f"del_prof_{row['id']}"):
                         st.session_state.pending_delete_prof = row["id"]
 
-# -----------------------------
-# 📈 Relatórios (gráficos coloridos)
-# -----------------------------
+# 📈 Relatórios (gráficos coloridos por categoria)
 if st.session_state.aba_selecionada == "📈 Relatórios":
     st.header("📈 Relatórios por Espaço / Turma / Período")
     render_persisted_message()
@@ -1251,9 +1110,7 @@ if st.session_state.aba_selecionada == "📈 Relatórios":
             st.subheader("📄 Tabela detalhada")
             st.dataframe(df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']], use_container_width=True, hide_index=True)
 
-# -----------------------------
-# 🧹 Manutenção (apenas Gestão com senha)
-# -----------------------------
+# 🧹 Manutenção (apenas Gestão)
 if st.session_state.aba_selecionada == "🧹 Manutenção":
     st.header("🧹 Manutenção / Limpeza de Agendamentos")
     render_persisted_message()
@@ -1280,11 +1137,6 @@ if st.session_state.aba_selecionada == "🧹 Manutenção":
             except Exception as e:
                 notify('error', f"Falha na limpeza: {e}", toast=True, persist=False)
 
-# -----------------------------
 # Rodapé
-# -----------------------------
 st.markdown("---")
-st.markdown(
-    "<div style='text-align:center;color:#b8bdc7;font-size:0.9rem'>Sistema de Agendamento • Streamlit + Supabase (sem login p/ professor) • Tema vermelho</div>",
-    unsafe_allow_html=True,
-)
+st.caption("Sistema de Agendamento • Streamlit + Supabase • Menu lateral")
