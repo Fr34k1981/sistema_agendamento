@@ -1,9 +1,8 @@
-
 # ============================================
 # Sistema de Agendamento • Streamlit + Supabase (REST, sem login p/ professor)
+# Navegação: MENU LATERAL (sidebar)
 # Abas: ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir |
 #       👥 Professores | 📈 Relatórios | 🧹 Manutenção
-# Navegação: MENU LATERAL (sidebar)
 # ============================================
 
 import os
@@ -26,7 +25,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 # -----------------------------
-# 0) Config da Página
+# 0) Config da Página (tema padrão)
 # -----------------------------
 st.set_page_config(page_title="Sistema de Agendamento", layout="wide", page_icon="📅")
 
@@ -245,8 +244,9 @@ def atualizar_agendamento(id_agend: str, payload: dict):
 
 def verificar_conflito_api(data_yyyy_mm_dd: str, horario: str, espaco: str):
     try:
+        # Inclui prioridade no SELECT para mensagens mais claras (se quiser evoluir a regra depois)
         path = "/rest/v1/agendamentos"
-        sel = "?select=id,professor_nome"
+        sel = "?select=id,professor_nome,prioridade"
         filtro = f"&data_agendamento=eq.{data_yyyy_mm_dd}&horario=eq.{horario}&espaco=eq.{espaco}&status=eq.ATIVO&limit=1"
         rows = _rest_get(path + sel + filtro)
         return rows[0] if rows else None
@@ -465,7 +465,7 @@ def importar_agendamentos_df(
     return sucessos, falhas, invalid_rows, df
 
 # -----------------------------
-# 6) Estados + MENU LATERAL
+# 6) Estados + MENU LATERAL (selectbox)
 # -----------------------------
 if 'gestao_logado' not in st.session_state:
     st.session_state.gestao_logado = False
@@ -478,25 +478,27 @@ if 'pending_delete_id' not in st.session_state:
 if 'pending_delete_prof' not in st.session_state:
     st.session_state.pending_delete_prof = None
 
-# Sidebar
-st.sidebar.title("📅 Sistema de Agendamento")
-st.sidebar.caption("Navegação")
-
-aba = st.sidebar.radio(
-    "Escolha uma seção:",
-    ("✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção"),
-    index=("✨ Agendar","📋 Meus Agendamentos","⚙️ Gestão","🖨️ Imprimir","👥 Professores","📈 Relatórios","🧹 Manutenção").index(st.session_state.aba_selecionada)
-)
+st.sidebar.title("📚 Menu Principal")
+menu_itens = [
+    "✨ Agendar",
+    "📋 Meus Agendamentos",
+    "🖨️ Imprimir",
+    "👥 Professores",
+    "📈 Relatórios",
+    "⚙️ Gestão",
+    "🧹 Manutenção",
+]
+aba = st.sidebar.selectbox("Navegar para:", menu_itens, index=menu_itens.index(st.session_state.aba_selecionada))
 st.session_state.aba_selecionada = aba
 
-# Limpar cache (útil após mudanças no banco)
+# Utilitário de cache
 if st.sidebar.button("🧽 Limpar cache"):
     st.cache_data.clear()
     st.sidebar.success("Cache limpo.")
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("© Sistema de Agendamento")
+st.sidebar.caption("Sistema de Agendamento • Streamlit + Supabase")
 
 # -----------------------------
 # 7) Função de gráfico (cores por categoria)
@@ -600,19 +602,27 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                         notify('warning', "⚠️ Horário de intervalo para esta turma", toast=True, persist=True)
                         st.rerun()
 
+            # Verifica conflito
             conflito_msg = None
+            detalhes = None
             for h in horarios:
                 for i in range(semanas_num + 1):
                     data_rep = data + timedelta(days=i * 7)
                     conf = verificar_conflito_api(data_rep.strftime("%Y-%m-%d"), h, espaco)
                     if conf:
-                        nome_quem = conf.get("professor_nome", "(desconhecido)")
-                        conflito_msg = f"{nome_quem} em {data_rep.strftime('%d/%m')} às {h}"
+                        ocupado_por = conf.get("professor_nome", "(desconhecido)")
+                        pri_ocupante = conf.get("prioridade", "NORMAL")
+                        conflito_msg = f"{ocupado_por} ({pri_ocupante}) em {data_rep.strftime('%d/%m')} às {h}"
+                        detalhes = conf
                         break
                 if conflito_msg: break
 
             if conflito_msg:
-                notify('error', f"❌ CONFLITO: {conflito_msg} já agendou", toast=True, persist=True)
+                # Mensagem clara (sem “derrubar” ninguém)
+                if detalhes and (detalhes.get("prioridade") in PRIORIDADES_ESTENDIDAS):
+                    notify('error', f"⛔ Já existe **PRIORIDADE** nesse horário: {conflito_msg}", toast=True, persist=True)
+                else:
+                    notify('error', f"❌ Conflito: {conflito_msg}", toast=True, persist=True)
                 st.rerun()
             else:
                 falhas, sucessos = [], 0
@@ -1139,4 +1149,5 @@ if st.session_state.aba_selecionada == "🧹 Manutenção":
 
 # Rodapé
 st.markdown("---")
-st.caption("Sistema de Agendamento • Streamlit + Supabase • Menu lateral")
+st.caption("Sistema de Agendamento • Menu lateral (cores padrão)")
+``
