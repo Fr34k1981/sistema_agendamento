@@ -22,7 +22,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 # -------- Gráficos (matplotlib) --------
 import matplotlib.pyplot as plt
 from matplotlib import cm
-import numpy as np
 
 # -----------------------------
 # 0) Config da Página
@@ -37,43 +36,32 @@ def inject_css():
         """
         <style>
         :root{
-            --brand-red: #D7263D;      /* vermelho principal */
-            --brand-red-dark: #B31F33; /* vermelho mais escuro */
-            --brand-red-light: #F04A5D;/* vermelho claro */
+            --brand-red: #D7263D;
+            --brand-red-dark: #B31F33;
             --brand-gray-900:#0F1116;
             --brand-gray-700:#1C212C;
-            --brand-gray-200:#E7E9EE;
             --brand-white:#FFFFFF;
         }
 
-        /* Fundo sutil */
         .stApp {
             background: linear-gradient(180deg, #0f1116 0%, #141824 100%);
             color: var(--brand-white);
         }
-
-        /* Títulos */
         h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
             color: var(--brand-white);
             text-shadow: 0 1px 0 rgba(0,0,0,.3);
         }
-
-        /* Linhas divisórias */
         hr, .stMarkdown hr {
             border: none;
             height: 1px;
             background: linear-gradient(90deg, transparent, var(--brand-red), transparent);
             margin: 12px 0 18px 0;
         }
-
-        /* Caixas/expanders */
         [data-testid="stExpander"] {
             border: 1px solid rgba(255,255,255,.08);
             background: rgba(255,255,255,.04);
             border-radius: 10px;
         }
-
-        /* Campos de entrada */
         .stTextInput > div > div > input,
         .stSelectbox > div > div > div,
         .stDateInput > div > div > input {
@@ -82,20 +70,18 @@ def inject_css():
             border: 1px solid rgba(255,255,255,.12) !important;
             border-radius: 10px !important;
         }
-
-        /* Dataframe glass */
         .stDataFrame {
             border: 1px solid rgba(255,255,255,.08);
             background: rgba(255,255,255,.03);
             border-radius: 10px;
         }
 
-        /* Botões base (largura do texto) */
+        /* Botões base (largura = conteúdo) */
         div.stButton > button, div.stDownloadButton > button {
             display: inline-block;
-            width: auto;                 /* largura = conteúdo */
+            width: auto;
             padding: 10px 16px;
-            border-radius: 999px;        /* pílula */
+            border-radius: 999px;
             border: 0;
             font-weight: 600;
             letter-spacing: .2px;
@@ -104,20 +90,16 @@ def inject_css():
             box-shadow: 0 6px 14px rgba(215, 38, 61, .35);
             transition: all .15s ease-in-out;
         }
-
-        /* Hover: brilho */
         div.stButton > button:hover, div.stDownloadButton > button:hover {
             transform: translateY(-1px);
             box-shadow: 0 10px 20px rgba(215, 38, 61, .55), 0 0 0 2px rgba(240, 74, 93, .25) inset;
         }
-
-        /* Active: press */
         div.stButton > button:active, div.stDownloadButton > button:active {
             transform: translateY(0);
             box-shadow: 0 6px 14px rgba(215, 38, 61, .35) inset;
         }
 
-        /* “Secondary button” – usamos quando não selecionado na navbar */
+        /* “Secondary” para navbar quando não selecionado */
         .btn-secondary > button{
             background: linear-gradient(180deg, #2a2f3f 0%, #1e2433 100%) !important;
             color: #e9ecf2 !important;
@@ -127,7 +109,6 @@ def inject_css():
             box-shadow: 0 8px 16px rgba(10, 12, 16, .6) !important;
         }
 
-        /* Contêiner horizontal (navbar) com espaçamento */
         .navbar-row {
             gap: 10px;
             display: flex;
@@ -135,11 +116,8 @@ def inject_css():
             align-items: center;
             margin-bottom: 6px;
         }
-        .navbar-row > div {
-            flex: 0 0 auto; /* não estica */
-        }
+        .navbar-row > div { flex: 0 0 auto; }
 
-        /* Alertas com borda vermelha suave */
         .stAlert {
             border-radius: 12px;
             background: rgba(255,255,255,.03);
@@ -213,7 +191,6 @@ HORARIOS = [
     "14:40-15:00", "14:50-15:40", "15:40-16:30", "16:40-17:30", "17:30-18:20"
 ]
 
-# Intervalos por turma (informativo)
 TURMAS_INTERVALOS = {
     "6º A": {"cafe": "08:40-09:00", "almoco": "10:40-11:30"},
     "6º B": {"cafe": "08:40-09:00", "almoco": "10:40-11:30"},
@@ -252,7 +229,7 @@ DISCIPLINAS = [
 ]
 
 # -----------------------------
-# 3) Notificações (toasts + persistente)
+# 3) Toasts / Mensagens
 # -----------------------------
 if 'mensagem_tipo' not in st.session_state:
     st.session_state.mensagem_tipo = None
@@ -261,8 +238,7 @@ if 'mensagem_texto' not in st.session_state:
 
 def notify(kind: str, msg: str, toast: bool = True, persist: bool = False):
     kind = (kind or "info").lower().strip()
-    if toast:
-        st.toast(msg)
+    if toast: st.toast(msg)
     if persist:
         st.session_state.mensagem_texto = msg
         st.session_state.mensagem_tipo = kind
@@ -427,11 +403,11 @@ def _parse_dt_mixed(value):
             pass
     try:
         num = float(value)
-        base = pd.Timestamp("1899-12-30")
-        dt = base + pd.to_timedelta(num, unit="D")
-        return dt.date().isoformat()
     except Exception:
         return None
+    base = pd.Timestamp("1899-12-30")
+    dt = base + pd.to_timedelta(num, unit="D")
+    return dt.date().isoformat()
 
 def _guess_status_from_row(row: dict) -> str:
     for key in ["status", "Status", "STATUS", "Data Agendamento", "data_agendamento", "Prioridade"]:
@@ -607,24 +583,27 @@ if st.button("🧽 Limpar cache (temporário)"):
     st.cache_data.clear()
     st.rerun()
 
-# Navbar (7 abas) — botões “soltos”, tamanho do texto
+# -----------------------------
+# 7) Navbar estilizada (botões no tamanho do texto)
+# -----------------------------
 nav_cols = st.container()
 with nav_cols:
     st.markdown('<div class="navbar-row">', unsafe_allow_html=True)
     col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+
     def nav_button(col, label):
         selected = (st.session_state.aba_selecionada == label)
-        # aplica classe "btn-secondary" quando NÃO selecionado (cor escura)
         with col:
-            btn_holder = st.container()
-            if not selected: 
-                btn_holder.markdown('<div class="btn-secondary">', unsafe_allow_html=True)
+            holder = st.container()
+            if not selected:
+                holder.markdown('<div class="btn-secondary">', unsafe_allow_html=True)
             clicked = st.button(label, key=f"nav_{label}")
             if not selected:
-                btn_holder.markdown('</div>', unsafe_allow_html=True)
+                holder.markdown('</div>', unsafe_allow_html=True)
             if clicked:
                 st.session_state.aba_selecionada = label
-                st.experimental_rerun()
+                st.rerun()
+
     nav_button(col1, "✨ Agendar")
     nav_button(col2, "📋 Meus Agendamentos")
     nav_button(col3, "⚙️ Gestão")
@@ -637,7 +616,47 @@ with nav_cols:
 st.markdown("---")
 
 # -----------------------------
-# 7) ABA ✨ Agendar
+# 8) Função de gráfico (cores por categoria)
+# -----------------------------
+def plot_bar_counts(series: pd.Series, title: str, max_bars: int = 30, palette: str = "tab20"):
+    """Plota barras com cores diferentes por categoria (top N)."""
+    if series is None or series.empty:
+        st.info("📭 Sem dados para o gráfico.")
+        return
+    series = series.sort_values(ascending=False).head(max_bars)
+    labels = series.index.astype(str).tolist()
+    values = series.values.astype(int)
+
+    cmap = cm.get_cmap(palette, len(labels))
+    colors_list = [cmap(i) for i in range(len(labels))]
+
+    fig, ax = plt.subplots(figsize=(min(12, 1 + 0.45*len(labels)), 5), dpi=120)
+    bars = ax.bar(labels, values, color=colors_list, edgecolor="#10131a", linewidth=0.6)
+    ax.set_title(title, color="#FFFFFF", fontsize=12, pad=12)
+    ax.set_ylabel("Quantidade", color="#FFFFFF")
+    ax.set_xticklabels(labels, rotation=45, ha="right", color="#E9ECF2")
+    ax.set_yticks(ax.get_yticks())
+    ax.set_yticklabels([int(t) for t in ax.get_yticks()], color="#E9ECF2")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#555a66")
+    ax.spines["bottom"].set_color("#555a66")
+    ax.set_facecolor("#0F1116")
+    fig.patch.set_facecolor("#0F1116")
+
+    for rect in bars:
+        height = rect.get_height()
+        if height > 0:
+            ax.text(rect.get_x() + rect.get_width()/2., 1.02*height,
+                    f"{int(height)}", ha='center', va='bottom', color="#FFFFFF", fontsize=8)
+    st.pyplot(fig, clear_figure=True)
+
+# =========================================================
+#                     ABAS (BLOCOS IF)
+# =========================================================
+
+# -----------------------------
+# ✨ Agendar
 # -----------------------------
 if st.session_state.aba_selecionada == "✨ Agendar":
     st.subheader("📅 Novo Agendamento — Espaços de Tecnologia e Leitura")
@@ -648,13 +667,11 @@ if st.session_state.aba_selecionada == "✨ Agendar":
 
     with st.form("form_agendamento", clear_on_submit=False):
         col1, col2 = st.columns(2)
-
         with col1:
             if not lista_nomes:
                 st.warning("⚠️ Nenhum professor ATIVO encontrado. Use a aba '👥 Professores' para cadastrar/importar.")
             professor = st.selectbox("👨‍🏫 Professor:", [""] + lista_nomes, index=0)
 
-            # auto preencher e-mail
             email_default = ""
             if professor and not df_prof.empty:
                 linha = df_prof[df_prof["nome"] == professor]
@@ -711,7 +728,6 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                         notify('warning', "⚠️ Horário de intervalo para esta turma", toast=True, persist=True)
                         st.rerun()
 
-            # Conflito
             conflito_msg = None
             for h in horarios:
                 for i in range(semanas_num + 1):
@@ -756,9 +772,9 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                 st.rerun()
 
 # -----------------------------
-# 8) ABA 📋 Meus Agendamentos (inclui Importar)
+# 📋 Meus Agendamentos (+ Importar)
 # -----------------------------
-elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
+if st.session_state.aba_selecionada == "📋 Meus Agendamentos":
     st.header("📋 Meus Agendamentos")
     render_persisted_message()
 
@@ -794,7 +810,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
 
                         a1, a2, a3 = st.columns(3)
 
-                        # --- Editar ---
                         if a1.button("✏️ Editar", key=f"edit_{row['id']}"):
                             st.session_state[f"edit_mode_{row['id']}"] = True
 
@@ -826,7 +841,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                             if st.button("↩️ Cancelar edição", key=f"cancel_edit_{row['id']}"):
                                 st.session_state[f"edit_mode_{row['id']}"] = False
 
-                        # --- Excluir (EXCLUIDO_GESTAO) ---
                         if a2.button("🗑️ Excluir", key=f"del_{row['id']}"):
                             st.session_state[f"confirm_del_{row['id']}"] = True
 
@@ -843,7 +857,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                             if d2.button("↩️ Voltar", key=f"undo_del_{row['id']}"):
                                 st.session_state[f"confirm_del_{row['id']}"] = False
 
-                        # --- Cancelar ---
                         if st.session_state.pending_cancel_id == row['id']:
                             c1, c2 = st.columns(2)
                             if c1.button("✅ Confirmar cancelamento", key=f"conf_cancel_{row['id']}"):
@@ -861,8 +874,6 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
                                 st.session_state.pending_cancel_id = row['id']
 
     st.markdown("---")
-
-    # ====== IMPORTAR AGENDAMENTOS ======
     st.subheader("📥 Importar agendamentos (CSV ou XLSX)")
     st.caption("Selecione o arquivo e, após o preview, clique em **🚀 Importar agora**.")
     colopt1, colopt2, colopt3 = st.columns(3)
@@ -931,9 +942,9 @@ elif st.session_state.aba_selecionada == "📋 Meus Agendamentos":
             notify('error', f"Erro ao processar arquivo: {e}", toast=True, persist=False)
 
 # -----------------------------
-# 9) ABA ⚙️ Gestão (senha simples)
+# ⚙️ Gestão (senha simples)
 # -----------------------------
-elif st.session_state.aba_selecionada == "⚙️ Gestão":
+if st.session_state.aba_selecionada == "⚙️ Gestão":
     st.header("⚙️ Gestão de Agendamentos")
     render_persisted_message()
 
@@ -996,9 +1007,9 @@ elif st.session_state.aba_selecionada == "⚙️ Gestão":
                             st.session_state.pending_delete_id = id_excluir
 
 # -----------------------------
-# 10) ABA 🖨️ Imprimir
+# 🖨️ Imprimir
 # -----------------------------
-elif st.session_state.aba_selecionada == "🖨️ Imprimir":
+if st.session_state.aba_selecionada == "🖨️ Imprimir":
     st.header("🖨️ Relatório para Impressão")
     render_persisted_message()
 
@@ -1084,9 +1095,9 @@ elif st.session_state.aba_selecionada == "🖨️ Imprimir":
                 )
 
 # -----------------------------
-# 11) ABA 👥 Professores (CRUD + Import CSV)
+# 👥 Professores (CRUD + CSV)
 # -----------------------------
-elif st.session_state.aba_selecionada == "👥 Professores":
+if st.session_state.aba_selecionada == "👥 Professores":
     st.header("👥 Professores — Importar, Cadastrar, Editar, Excluir")
     render_persisted_message()
 
@@ -1193,47 +1204,9 @@ elif st.session_state.aba_selecionada == "👥 Professores":
                         st.session_state.pending_delete_prof = row["id"]
 
 # -----------------------------
-# 12) Funções de gráfico colorido (por categoria)
+# 📈 Relatórios (gráficos coloridos)
 # -----------------------------
-def plot_bar_counts(series: pd.Series, title: str, max_bars: int = 30, palette: str = "tab20"):
-    """Plota barras com cores diferentes por categoria (top N)."""
-    if series is None or series.empty:
-        st.info("📭 Sem dados para o gráfico.")
-        return
-    series = series.sort_values(ascending=False).head(max_bars)
-    labels = series.index.astype(str).tolist()
-    values = series.values.astype(int)
-
-    # Paleta
-    cmap = cm.get_cmap(palette, len(labels))
-    colors_list = [cmap(i) for i in range(len(labels))]
-
-    fig, ax = plt.subplots(figsize=(min(12, 1 + 0.45*len(labels)), 5), dpi=120)
-    bars = ax.bar(labels, values, color=colors_list, edgecolor="#10131a", linewidth=0.6)
-    ax.set_title(title, color="#FFFFFF", fontsize=12, pad=12)
-    ax.set_ylabel("Quantidade", color="#FFFFFF")
-    ax.set_xticklabels(labels, rotation=45, ha="right", color="#E9ECF2")
-    ax.set_yticks(ax.get_yticks())
-    ax.set_yticklabels([int(t) for t in ax.get_yticks()], color="#E9ECF2")
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#555a66")
-    ax.spines["bottom"].set_color("#555a66")
-    ax.set_facecolor("#0F1116")
-    fig.patch.set_facecolor("#0F1116")
-
-    # Valores nas barras
-    for rect in bars:
-        height = rect.get_height()
-        if height > 0:
-            ax.text(rect.get_x() + rect.get_width()/2., 1.02*height,
-                    f"{int(height)}", ha='center', va='bottom', color="#FFFFFF", fontsize=8)
-    st.pyplot(fig, clear_figure=True)
-
-# -----------------------------
-# 13) ABA 📈 Relatórios
-# -----------------------------
-elif st.session_state.aba_selecionada == "📈 Relatórios":
+if st.session_state.aba_selecionada == "📈 Relatórios":
     st.header("📈 Relatórios por Espaço / Turma / Período")
     render_persisted_message()
 
@@ -1255,39 +1228,33 @@ elif st.session_state.aba_selecionada == "📈 Relatórios":
         if df.empty:
             st.info("📭 Sem dados no período.")
         else:
-            # Por Professor
             st.subheader("👨‍🏫 Quem mais usa (Professores)")
             por_prof = df.groupby("professor_nome")["id"].count()
             plot_bar_counts(por_prof, "Uso por Professor", palette="tab20")
 
             colx, coly = st.columns(2)
             with colx:
-                # Por Turma
                 st.subheader("🎓 Turmas que mais usam")
                 por_turma = df.groupby("turma")["id"].count()
                 plot_bar_counts(por_turma, "Uso por Turma", palette="Set3")
             with coly:
-                # Por Espaço
                 st.subheader("📍 Espaços mais usados")
                 por_espaco = df.groupby("espaco")["id"].count()
                 plot_bar_counts(por_espaco, "Uso por Espaço", palette="tab20")
 
-            # Por Dia da Semana
             st.subheader("🗓️ Por Dia da Semana")
             df["dia_semana"] = pd.to_datetime(df["data_agendamento"]).dt.day_name()
-            por_dia = df.groupby("dia_semana")["id"].count()
-            # Ordena dias: Monday..Sunday
             ordem = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-            por_dia = por_dia.reindex(ordem).dropna()
+            por_dia = df.groupby("dia_semana")["id"].count().reindex(ordem).dropna()
             plot_bar_counts(por_dia, "Uso por Dia da Semana", palette="tab20")
 
             st.subheader("📄 Tabela detalhada")
             st.dataframe(df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']], use_container_width=True, hide_index=True)
 
 # -----------------------------
-# 14) ABA 🧹 Manutenção (apenas Gestão com senha)
+# 🧹 Manutenção (apenas Gestão com senha)
 # -----------------------------
-elif st.session_state.aba_selecionada == "🧹 Manutenção":
+if st.session_state.aba_selecionada == "🧹 Manutenção":
     st.header("🧹 Manutenção / Limpeza de Agendamentos")
     render_persisted_message()
 
@@ -1314,7 +1281,7 @@ elif st.session_state.aba_selecionada == "🧹 Manutenção":
                 notify('error', f"Falha na limpeza: {e}", toast=True, persist=False)
 
 # -----------------------------
-# 15) Rodapé
+# Rodapé
 # -----------------------------
 st.markdown("---")
 st.markdown(
