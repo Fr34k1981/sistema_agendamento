@@ -1,13 +1,14 @@
 # ============================================
 # Sistema de Agendamento • Streamlit + Supabase (REST, sem login p/ professor)
 # Navegação: MENU LATERAL (sidebar)
-# Abas: ✨ Agendar | 📋 Meus Agendamentos | ⚙️ Gestão | 🖨️ Imprimir |
-#       👥 Professores | 📈 Relatórios | 🧹 Manutenção
+# Abas: ✨ Agendar | 📋 Meus Agendamentos | 🖨️ Imprimir | 👥 Professores |
+#       📈 Relatórios | ⚙️ Gestão | 🧹 Manutenção
 # ============================================
 
 import os
 import re
 from datetime import datetime, timedelta
+from io import BytesIO
 
 import pandas as pd
 import requests
@@ -86,8 +87,8 @@ ESPACOS = [
 HORARIOS = [
     "07:00-07:50", "07:50-08:40", "08:40-09:00", "08:40-09:30",
     "09:00-09:50", "09:30-09:50", "09:50-10:40", "10:40-11:30",
-    "11:30-12:20", "12:20-13:10", "13:10-14:00", "14:00-14:50",
-    "14:40-15:00", "14:50-15:40", "15:40-16:30", "16:40-17:30", "17:30-18:20"
+    "11:30-12:20", "12:20-13:10", "13:10-14:00", "14:30-15:20",
+    "15:20-16:10", "16:30-17:20", "17:20-18:10", "18:10-19:00", "19:50-20:40", "20:40-21:30"
 ]
 
 TURMAS_INTERVALOS = {
@@ -244,7 +245,7 @@ def atualizar_agendamento(id_agend: str, payload: dict):
 
 def verificar_conflito_api(data_yyyy_mm_dd: str, horario: str, espaco: str):
     try:
-        # Inclui prioridade no SELECT para mensagens mais claras (se quiser evoluir a regra depois)
+        # Traz prioridade para mensagens mais claras
         path = "/rest/v1/agendamentos"
         sel = "?select=id,professor_nome,prioridade"
         filtro = f"&data_agendamento=eq.{data_yyyy_mm_dd}&horario=eq.{horario}&espaco=eq.{espaco}&status=eq.ATIVO&limit=1"
@@ -602,7 +603,6 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                         notify('warning', "⚠️ Horário de intervalo para esta turma", toast=True, persist=True)
                         st.rerun()
 
-            # Verifica conflito
             conflito_msg = None
             detalhes = None
             for h in horarios:
@@ -618,7 +618,6 @@ if st.session_state.aba_selecionada == "✨ Agendar":
                 if conflito_msg: break
 
             if conflito_msg:
-                # Mensagem clara (sem “derrubar” ninguém)
                 if detalhes and (detalhes.get("prioridade") in PRIORIDADES_ESTENDIDAS):
                     notify('error', f"⛔ Já existe **PRIORIDADE** nesse horário: {conflito_msg}", toast=True, persist=True)
                 else:
@@ -821,69 +820,6 @@ if st.session_state.aba_selecionada == "📋 Meus Agendamentos":
         except Exception as e:
             notify('error', f"Erro ao processar arquivo: {e}", toast=True, persist=False)
 
-# ⚙️ Gestão (senha simples)
-if st.session_state.aba_selecionada == "⚙️ Gestão":
-    st.header("⚙️ Gestão de Agendamentos")
-    render_persisted_message()
-
-    if not st.session_state.gestao_logado:
-        st.info("🔐 Acesso restrito")
-        senha = st.text_input("Senha da Gestão:", type="password")
-        if st.button("🔓 Acessar"):
-            if senha == SENHA_GESTAO:
-                st.session_state.gestao_logado = True
-                notify('success', "✅ Acesso autorizado!", toast=True, persist=True)
-                st.rerun()
-            else:
-                notify('error', "❌ Senha inválida", toast=True, persist=False)
-    else:
-        if st.button("🚪 Sair da Gestão"):
-            st.session_state.gestao_logado = False
-            st.rerun()
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            data_inicio = st.date_input("Início:", datetime.now().date())
-        with col2:
-            data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=30))
-        with col3:
-            espaco_filtro = st.selectbox("Espaço:", ["Todos"] + ESPACOS)
-
-        if st.button("🔍 Carregar"):
-            df = carregar_agendamentos_filtrado(
-                data_inicio.strftime("%Y-%m-%d"),
-                data_fim.strftime("%Y-%m-%d"),
-                espaco=None if espaco_filtro=="Todos" else espaco_filtro
-            )
-            if df.empty:
-                st.info("📭 Nada no período escolhido.")
-            else:
-                st.dataframe(
-                    df[['id','data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']],
-                    use_container_width=True, hide_index=True
-                )
-
-                st.markdown("### 🗑️ Excluir (marcar como EXCLUIDO_GESTAO)")
-                id_list = df['id'].tolist()
-                id_excluir = st.selectbox("Selecione o ID:", id_list)
-
-                if id_excluir:
-                    if st.session_state.pending_delete_id == id_excluir:
-                        c1, c2 = st.columns(2)
-                        if c1.button("✅ Confirmar exclusão", key=f"conf_{id_excluir}"):
-                            ok, err = excluir_agendamento(id_excluir)
-                            if ok:
-                                notify('success', "🗑️ Agendamento marcado como EXCLUIDO_GESTAO.", toast=True, persist=True)
-                                st.session_state.pending_delete_id = None
-                                st.rerun()
-                            else:
-                                notify('error', f"Erro: {err}", toast=True, persist=False)
-                        if c2.button("↩️ Cancelar", key=f"undo_{id_excluir}"):
-                            st.session_state.pending_delete_id = None
-                    else:
-                        if st.button("🗑️ Excluir Permanentemente"):
-                            st.session_state.pending_delete_id = id_excluir
-
 # 🖨️ Imprimir
 if st.session_state.aba_selecionada == "🖨️ Imprimir":
     st.header("🖨️ Relatório para Impressão")
@@ -926,7 +862,6 @@ if st.session_state.aba_selecionada == "🖨️ Imprimir":
             # Exportar PDF
             def gerar_pdf_agendamentos(df_pdf: pd.DataFrame, titulo: str = "Relatório de Agendamentos") -> bytes:
                 if df_pdf is None or df_pdf.empty: return b""
-                from io import BytesIO
                 buffer = BytesIO()
                 doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=20, bottomMargin=20)
                 styles = getSampleStyleSheet()
@@ -1074,51 +1009,212 @@ if st.session_state.aba_selecionada == "👥 Professores":
                     if st.button("🗑️ Excluir definitivamente", key=f"del_prof_{row['id']}"):
                         st.session_state.pending_delete_prof = row["id"]
 
-# 📈 Relatórios (gráficos coloridos por categoria)
+# 📈 Relatórios (por turma/professor/prioridade/disciplina/espaço + gráficos + rankings)
 if st.session_state.aba_selecionada == "📈 Relatórios":
-    st.header("📈 Relatórios por Espaço / Turma / Período")
+    st.header("📈 Relatórios por Categoria")
     render_persisted_message()
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        data_inicio = st.date_input("Início:", datetime.now().date() - timedelta(days=7))
-    with c2:
-        data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=7))
-    with c3:
-        status_filtro = st.selectbox("Status:", ["Todos", "ATIVO", "CANCELADO", "EXCLUIDO_GESTAO"], index=0)
+    # Filtros do relatório
+    with st.expander("🎛️ Filtros do relatório", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            data_inicio = st.date_input("Início:", datetime.now().date() - timedelta(days=7))
+        with c2:
+            data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=7))
+        with c3:
+            status_filtro = st.selectbox("Status:", ["Todos", "ATIVO", "CANCELADO", "EXCLUIDO_GESTAO"], index=0)
 
-    if st.button("📊 Gerar"):
-        df = carregar_agendamentos_filtrado(
-            data_inicio.strftime("%Y-%m-%d"),
-            data_fim.strftime("%Y-%m-%d")
+        # Carrega primeiro para opções dinâmicas
+        df_base = carregar_agendamentos_filtrado(
+            data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")
         )
+        # Opções dinâmicas
+        prof_opts = ["Todos"] + sorted(df_base["professor_nome"].dropna().unique().tolist()) if not df_base.empty else ["Todos"]
+        turma_opts = ["Todos"] + sorted(df_base["turma"].dropna().unique().tolist()) if not df_base.empty else ["Todos"]
+        espaco_opts = ["Todos"] + sorted(df_base["espaco"].dropna().unique().tolist()) if not df_base.empty else ["Todos"]
+        disc_opts = ["Todos"] + sorted(df_base["disciplina"].dropna().unique().tolist()) if not df_base.empty else ["Todos"]
+        prio_opts = ["Todos"] + sorted(df_base["prioridade"].dropna().unique().tolist()) if not df_base.empty else ["Todos"]
+
+        d1, d2, d3, d4, d5 = st.columns(5)
+        with d1:
+            prof_sel = st.selectbox("Professor:", prof_opts, index=0)
+        with d2:
+            turma_sel = st.selectbox("Turma:", turma_opts, index=0)
+        with d3:
+            espaco_sel = st.selectbox("Espaço:", espaco_opts, index=0)
+        with d4:
+            disc_sel = st.selectbox("Disciplina:", disc_opts, index=0)
+        with d5:
+            prio_sel = st.selectbox("Prioridade:", prio_opts, index=0)
+
+        gerar = st.button("📊 Gerar Relatórios")
+
+    if gerar:
+        df = df_base.copy()
         if status_filtro != "Todos":
             df = df[df["status"] == status_filtro]
-        if df.empty:
-            st.info("📭 Sem dados no período.")
-        else:
-            st.subheader("👨‍🏫 Quem mais usa (Professores)")
-            por_prof = df.groupby("professor_nome")["id"].count()
-            plot_bar_counts(por_prof, "Uso por Professor", palette="tab20")
+        if prof_sel != "Todos":
+            df = df[df["professor_nome"] == prof_sel]
+        if turma_sel != "Todos":
+            df = df[df["turma"] == turma_sel]
+        if espaco_sel != "Todos":
+            df = df[df["espaco"] == espaco_sel]
+        if disc_sel != "Todos":
+            df = df[df["disciplina"] == disc_sel]
+        if prio_sel != "Todos":
+            df = df[df["prioridade"] == prio_sel]
 
-            colx, coly = st.columns(2)
-            with colx:
-                st.subheader("🎓 Turmas que mais usam")
+        if df.empty:
+            st.info("📭 Sem dados para os filtros escolhidos.")
+        else:
+            # ---- Gráficos por categoria ----
+            st.subheader("📊 Gráficos por Categoria")
+            gx1, gx2 = st.columns(2)
+            with gx1:
+                por_prof = df.groupby("professor_nome")["id"].count()
+                plot_bar_counts(por_prof, "Uso por Professor", palette="tab20")
+            with gx2:
                 por_turma = df.groupby("turma")["id"].count()
                 plot_bar_counts(por_turma, "Uso por Turma", palette="Set3")
-            with coly:
-                st.subheader("📍 Espaços mais usados")
-                por_espaco = df.groupby("espaco")["id"].count()
-                plot_bar_counts(por_espaco, "Uso por Espaço", palette="tab20")
 
-            st.subheader("🗓️ Por Dia da Semana")
-            df["dia_semana"] = pd.to_datetime(df["data_agendamento"]).dt.day_name()
-            ordem = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-            por_dia = df.groupby("dia_semana")["id"].count().reindex(ordem).dropna()
-            plot_bar_counts(por_dia, "Uso por Dia da Semana", palette="tab20")
+            gx3, gx4 = st.columns(2)
+            with gx3:
+                por_prior = df.groupby("prioridade")["id"].count()
+                plot_bar_counts(por_prior, "Uso por Prioridade", palette="Pastel1")
+            with gx4:
+                por_disc = df.groupby("disciplina")["id"].count()
+                plot_bar_counts(por_disc, "Uso por Disciplina", palette="tab10")
 
-            st.subheader("📄 Tabela detalhada")
-            st.dataframe(df[['data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']], use_container_width=True, hide_index=True)
+            st.subheader("📍 Espaços/Equipamentos")
+            por_espaco = df.groupby("espaco")["id"].count()
+            plot_bar_counts(por_espaco, "Uso por Espaço/Equipamento", palette="tab20")
+
+            st.markdown("---")
+
+            # ---- Listas (rankings) solicitadas ----
+            st.subheader("🏆 Rankings (modelo de lista)")
+            # Professor que mais agendou
+            top_prof = por_prof.sort_values(ascending=False)
+            if not top_prof.empty:
+                st.markdown("**👨‍🏫 Professor(es) que mais agendaram:**")
+                for i, (k, v) in enumerate(top_prof.items(), start=1):
+                    st.write(f"{i}. {k} — {int(v)} agendamento(s)")
+            else:
+                st.caption("Sem dados de professor.")
+
+            st.markdown("")
+            # Turma que mais vai
+            top_turma = por_turma.sort_values(ascending=False)
+            if not top_turma.empty:
+                st.markdown("**🎓 Turma(s) que mais comparecem:**")
+                for i, (k, v) in enumerate(top_turma.items(), start=1):
+                    st.write(f"{i}. {k} — {int(v)} agendamento(s)")
+            else:
+                st.caption("Sem dados de turma.")
+
+            st.markdown("")
+            # Espaço/Equipamento mais usado
+            top_esp = por_espaco.sort_values(ascending=False)
+            if not top_esp.empty:
+                st.markdown("**📍 Espaços/Equipamentos mais usados:**")
+                for i, (k, v) in enumerate(top_esp.items(), start=1):
+                    st.write(f"{i}. {k} — {int(v)} agendamento(s)")
+            else:
+                st.caption("Sem dados de espaço/equipamento.")
+
+            st.markdown("---")
+
+            # ---- Exportar resumo dos rankings em CSV ----
+            st.subheader("📥 Exportar resumo dos rankings")
+            # Monta um DF com categoria, item, total
+            resumo_rows = []
+            for k, v in (top_prof or {}).items():
+                resumo_rows.append({"categoria": "professor", "item": k, "total": int(v)})
+            for k, v in (top_turma or {}).items():
+                resumo_rows.append({"categoria": "turma", "item": k, "total": int(v)})
+            for k, v in (top_esp or {}).items():
+                resumo_rows.append({"categoria": "espaco", "item": k, "total": int(v)})
+            if not por_prior.empty:
+                for k, v in por_prior.sort_values(ascending=False).items():
+                    resumo_rows.append({"categoria": "prioridade", "item": k, "total": int(v)})
+            if not por_disc.empty:
+                for k, v in por_disc.sort_values(ascending=False).items():
+                    resumo_rows.append({"categoria": "disciplina", "item": k, "total": int(v)})
+
+            if resumo_rows:
+                df_resumo = pd.DataFrame(resumo_rows)
+                st.dataframe(df_resumo, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇️ Baixar CSV (resumo rankings)",
+                    data=df_resumo.to_csv(index=False, encoding="utf-8-sig"),
+                    file_name=f"resumo_rankings_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.caption("Sem dados para exportar no resumo.")
+
+# ⚙️ Gestão (senha simples)
+if st.session_state.aba_selecionada == "⚙️ Gestão":
+    st.header("⚙️ Gestão de Agendamentos")
+    render_persisted_message()
+
+    if not st.session_state.gestao_logado:
+        st.info("🔐 Acesso restrito")
+        senha = st.text_input("Senha da Gestão:", type="password")
+        if st.button("🔓 Acessar"):
+            if senha == SENHA_GESTAO:
+                st.session_state.gestao_logado = True
+                notify('success', "✅ Acesso autorizado!", toast=True, persist=True)
+                st.rerun()
+            else:
+                notify('error', "❌ Senha inválida", toast=True, persist=False)
+    else:
+        if st.button("🚪 Sair da Gestão"):
+            st.session_state.gestao_logado = False
+            st.rerun()
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            data_inicio = st.date_input("Início:", datetime.now().date())
+        with col2:
+            data_fim = st.date_input("Fim:", datetime.now().date() + timedelta(days=30))
+        with col3:
+            espaco_filtro = st.selectbox("Espaço:", ["Todos"] + ESPACOS)
+
+        if st.button("🔍 Carregar"):
+            df = carregar_agendamentos_filtrado(
+                data_inicio.strftime("%Y-%m-%d"),
+                data_fim.strftime("%Y-%m-%d"),
+                espaco=None if espaco_filtro=="Todos" else espaco_filtro
+            )
+            if df.empty:
+                st.info("📭 Nada no período escolhido.")
+            else:
+                st.dataframe(
+                    df[['id','data_agendamento','horario','espaco','turma','professor_nome','disciplina','prioridade','status']],
+                    use_container_width=True, hide_index=True
+                )
+
+                st.markdown("### 🗑️ Excluir (marcar como EXCLUIDO_GESTAO)")
+                id_list = df['id'].tolist()
+                id_excluir = st.selectbox("Selecione o ID:", id_list)
+
+                if id_excluir:
+                    if st.session_state.pending_delete_id == id_excluir:
+                        c1, c2 = st.columns(2)
+                        if c1.button("✅ Confirmar exclusão", key=f"conf_{id_excluir}"):
+                            ok, err = excluir_agendamento(id_excluir)
+                            if ok:
+                                notify('success', "🗑️ Agendamento marcado como EXCLUIDO_GESTAO.", toast=True, persist=True)
+                                st.session_state.pending_delete_id = None
+                                st.rerun()
+                            else:
+                                notify('error', f"Erro: {err}", toast=True, persist=False)
+                        if c2.button("↩️ Cancelar", key=f"undo_{id_excluir}"):
+                            st.session_state.pending_delete_id = None
+                    else:
+                        if st.button("🗑️ Excluir Permanentemente"):
+                            st.session_state.pending_delete_id = id_excluir
 
 # 🧹 Manutenção (apenas Gestão)
 if st.session_state.aba_selecionada == "🧹 Manutenção":
