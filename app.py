@@ -72,7 +72,7 @@ SENHA_GESTAO = "040600"          # ajuste aqui a senha da Gestão
 DIAS_PRIORITARIO = 60
 DIAS_NORMAL = 15
 
-PRIORIDADES_ESTENDIDAS = ["Redação", "Leitura", "Tecnologia", "Programação", "Matific"]
+PRIORIDADES_ESTENDIDAS = ["Redação", "Leitura", "Tecnologia", "Programação", "Khan Academy"]
 PRIORIDADES_OUTRAS = ["Matific", "Alura", "Speak"]
 PRIORIDADE_VALIDAS = {"PRIORITARIO", "PRIORITÁRIO", "NORMAL"} | set(PRIORIDADES_ESTENDIDAS) | set(PRIORIDADES_OUTRAS)
 
